@@ -16,6 +16,13 @@
 
 #if _WIN32
 extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
+#else
+#   if defined(__OBJC__)
+#       import <Foundation/NSObjCRuntime.h>
+#   else
+#       include <CoreFoundation/CFString.h>
+        extern "C" void NSLog(CFStringRef _format, ...);
+#   endif
 #endif
 
 void debug_output(const char* message);
@@ -39,7 +46,15 @@ void trace(const char* format, ...)
 
 void debug_output(const char* message)
 {
-    OutputDebugStringA(message); // visual studio
+#if _WIN32
+    OutputDebugStringA(message);
+#else
+#   if defined(__OBJC__)
+    NSLog(@"%s", message);
+#   else
+    NSLog(CFSTR("%s"), message);
+#   endif
+#endif
 }
 
 namespace {
@@ -80,11 +95,11 @@ namespace triangle
     GLuint program;
 
 const char* vertex_shader_code = R"__(
-#version 450
+#version 330 core
 
 layout(location = 0) in vec2 a_position;
 layout(location = 1) in vec2 a_texcoord;
-layout(location = 0) out vec2 v_texcoord;
+out vec2 v_texcoord;
 
 void main()
 {
@@ -94,20 +109,20 @@ void main()
 )__";
 
 const char* fragment_shader_code = R"__(
-#version 450
+#version 330 core
 
-layout(binding = 0) uniform sampler2D u_sampler;
-layout(std140, binding = 0) uniform u_fragment
+uniform sampler2D u_sampler;
+layout(std140) uniform u_fragment
 {
     vec4 color;
 } u_frag;
 
-layout(location = 0) in vec2 v_texcoord;
-layout(location = 0) out vec4 color_out;
+in vec2 v_texcoord;
+out vec4 color_out;
 
 void main()
 {
-    color_out = texture2D(u_sampler, v_texcoord) * u_frag.color;
+    color_out = texture(u_sampler, v_texcoord) * u_frag.color;
 }
 )__";
 
@@ -322,8 +337,6 @@ static void key_callback(GLFWwindow* window, int key, int scancode, int action, 
 
 void triangle::render_profile_ui()
 {
-    bool bUpdated = false;
-
     ImGui::SetNextWindowPos(
         ImVec2(width - 200.f - 10.f, 10.f),
         ImGuiSetCond_FirstUseEver);
@@ -418,10 +431,10 @@ int main(void)
         exit(EXIT_FAILURE);
 
     glfwWindowHint(GLFW_SAMPLES, samples);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
