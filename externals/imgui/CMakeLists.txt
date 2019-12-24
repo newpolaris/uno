@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.6)
+project(imgui)
 
 add_definitions(
 	-DUSE_IM_GUI_OTHER_FONT
@@ -17,3 +17,10 @@ add_library(
         stb_textedit.h
         stb_truetype.h
         )
+
+target_include_directories(imgui PRIVATE ${glad_SOURCE_DIR}/include)
+target_link_libraries(imgui PRIVATE glad)
+
+target_include_directories(imgui PRIVATE ${GLFW_SOURCE_DIR}/deps)
+target_include_directories(imgui PRIVATE ${GLFW_SOURCE_DIR}/include)
+target_link_libraries(imgui PRIVATE glfw)

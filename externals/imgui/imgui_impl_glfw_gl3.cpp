@@ -17,7 +17,7 @@
 #include "icons_font_awesome.ttf.h"
 
 // GL3W/GLFW
-#include <GL/glew.h>    // This example is using gl3w to access OpenGL functions (because it is small). You may use glew/glad/glLoadGen/etc. whatever already works for you.
+#include <glad/glad.h>    // This example is using gl3w to access OpenGL functions (because it is small). You may use glew/glad/glLoadGen/etc. whatever already works for you.
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
 #undef APIENTRY
