@@ -5,12 +5,43 @@
 #include <glm/glm.hpp>
 
 #include <cmath>
+#include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
 #include <vector>
+#include <sstream>
+
+#if _WIN32
+extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
+#endif
+
+void debug_output(const char* message);
+void trace(const char* format, ...);
+
+void trace(const char* format, ...)
+{
+    const int kLength = 1024;
+    char buffer[kLength + 1] = {0,};
+    
+    va_list argList;
+    va_start(argList, format);
+    int len = vsnprintf(buffer, kLength, format, argList);
+    va_end(argList);
+    if (len > kLength)
+        len = kLength;
+    buffer[len] = '\0';
+
+    debug_output(buffer);
+}
+
+void debug_output(const char* message)
+{
+    OutputDebugStringA(message); // visual studio
+}
 
 namespace {
+    GLint samples = 4;
     int width = 600;
     int height = 400;
     float cpu_time = 0.f;
@@ -24,6 +55,8 @@ namespace triangle
     void render_frame();
     void begin_frame();
     void end_frame();
+    void render_ui();
+    void render_profile_ui();
     void cleanup();
 
     GLuint create_shader(GLenum type, const char* shaderCode);
@@ -83,7 +116,7 @@ GLuint triangle::create_shader(GLenum type, const char* shaderCode)
         glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
         std::vector<GLchar> buffer(length + 1);
         glGetShaderInfoLog(id, length, 0, buffer.data());
-        printf("%s (%d) %s\n", __FILE__, __LINE__, buffer.data());
+        trace("%s (%d) %s\n", __FILE__, __LINE__, buffer.data());
         glDeleteShader(id);
         return 0;
     }
@@ -108,7 +141,7 @@ GLuint triangle::create_program(GLuint vertex, GLuint fragment)
             const uint32_t kBufferSize = 512u;  
             char log[kBufferSize];
             glGetProgramInfoLog(id, sizeof(log), nullptr, log);
-            printf("%s:%d %d: %s", __FILE__, __LINE__, status, log);
+            trace("%s:%d %d: %s", __FILE__, __LINE__, status, log);
             return 0;
         }
     }
@@ -231,7 +264,7 @@ void triangle::cleanup()
 
 static void error_callback(int error, const char* description)
 {
-    fprintf(stderr, "Error: %s\n", description);
+    trace("Error: %s\n", description);
 }
 
 static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -240,7 +273,7 @@ static void key_callback(GLFWwindow* window, int key, int scancode, int action, 
         glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
-void render_profile_ui()
+void triangle::render_profile_ui()
 {
     bool bUpdated = false;
 
@@ -262,7 +295,7 @@ void render_profile_ui()
     ImGui::End();
 }
 
-void render_ui()
+void triangle::render_ui()
 {
     ImGui_ImplGlfwGL3_NewFrame();
     render_profile_ui();
@@ -270,6 +303,65 @@ void render_ui()
     ImGui::EndFrame();
 }
 
+void APIENTRY opengl_callback(GLenum source,
+    GLenum type,
+    GLuint id,
+    GLenum severity,
+    GLsizei length,
+    const GLchar* message,
+    const void* userParam)
+{
+    using namespace std;
+
+    // ignore these non-significant error codes
+    if (id == 131169 || id == 131185 || id == 131218 || id == 131204 || id == 131184)
+        return;
+
+    stringstream out;
+
+    out << "---------------------OPENGL-CALLBACK-START------------" << endl;
+    out << "message: " << message << endl;
+    out << "type: ";
+    switch (type) {
+    case GL_DEBUG_TYPE_ERROR:
+        out << "ERROR";
+        break;
+    case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
+        out << "DEPRECATED_BEHAVIOR";
+        break;
+    case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:
+        out << "UNDEFINED_BEHAVIOR";
+        break;
+    case GL_DEBUG_TYPE_PORTABILITY:
+        out << "PORTABILITY";
+        break;
+    case GL_DEBUG_TYPE_PERFORMANCE:
+        out << "PERFORMANCE";
+        break;
+    case GL_DEBUG_TYPE_OTHER:
+        out << "OTHER";
+        break;
+    }
+    out << endl;
+
+    out << "id: " << id << endl;
+    out << "severity: ";
+    switch (severity) {
+    case GL_DEBUG_SEVERITY_LOW:
+        out << "LOW";
+        break;
+    case GL_DEBUG_SEVERITY_MEDIUM:
+        out << "MEDIUM";
+        break;
+    case GL_DEBUG_SEVERITY_HIGH:
+        out << "HIGH";
+        break;
+    }
+    out << endl;
+    out << "---------------------OPENGL-CALLBACK-END--------------" << endl;
+
+    trace(out.str().c_str());
+}
 
 int main(void)
 {
@@ -277,6 +369,12 @@ int main(void)
 
     if (!glfwInit())
         exit(EXIT_FAILURE);
+
+    glfwWindowHint(GLFW_SAMPLES, samples);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
@@ -287,9 +385,25 @@ int main(void)
 
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    glfwSwapInterval(1);
     glfwSetKeyCallback(window, key_callback);
 
     ImGui_ImplGlfwGL3_Init(window, false);
+
+    glGetIntegerv(GL_SAMPLES, &samples);
+    if (samples)
+        trace("Context reports MSAA is available with %i samples\n", samples);
+    else
+        trace("Context reports MSAA is unavailable\n");
+
+    trace("%s\n%s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+
+    glEnable(GL_DEBUG_OUTPUT);
+    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    if (glDebugMessageCallback) {
+        glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
+        glDebugMessageCallback(opengl_callback, nullptr);
+    }
 
     triangle::setup();
 
@@ -299,6 +413,7 @@ int main(void)
         glfwGetFramebufferSize(window, &width, &height);
 
         GLuint time_query[2];
+        glGenQueries(2, time_query);
 
         auto cpu_tick = std::chrono::high_resolution_clock::now();
         glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
@@ -322,7 +437,7 @@ int main(void)
 
         gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
 
-        render_ui();
+        triangle::render_ui();
 
         glfwSwapBuffers(window);
         glfwPollEvents();
