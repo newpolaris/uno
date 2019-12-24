@@ -3,6 +3,8 @@
 #include <imgui.h>
 #include <imgui_impl_glfw_gl3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp> 
 
 #include <cmath>
 #include <iostream>
@@ -66,21 +68,23 @@ namespace triangle
     GLuint texture;
     GLuint vao;
     GLuint vbo;
+    GLuint ubo;
 
     GLint position_attribute;
     GLint texcoord_attribute;
     GLint sampler_location;
+    GLint block_index;
 
     GLuint vertex_shader;
     GLuint fragment_shader;
     GLuint program;
 
-    const char* vertex_shader_code = R"__(
-#version 120
+const char* vertex_shader_code = R"__(
+#version 450
 
-attribute vec2 a_position;
-attribute vec2 a_texcoord;
-varying vec2 v_texcoord;
+layout(location = 0) in vec2 a_position;
+layout(location = 1) in vec2 a_texcoord;
+layout(location = 0) out vec2 v_texcoord;
 
 void main()
 {
@@ -89,17 +93,25 @@ void main()
 }
 )__";
 
-    const char* fragment_shader_code = R"__(
-#version 120
+const char* fragment_shader_code = R"__(
+#version 450
 
-uniform sampler2D u_sampler;
-varying vec2 v_texcoord;
+layout(binding = 0) uniform sampler2D u_sampler;
+layout(std140, binding = 0) uniform u_fragment
+{
+    vec4 color;
+} u_frag;
+
+layout(location = 0) in vec2 v_texcoord;
+layout(location = 0) out vec4 color_out;
+
 void main()
 {
-    gl_FragColor = texture2D(u_sampler, v_texcoord);
+    color_out = texture2D(u_sampler, v_texcoord) * u_frag.color;
 }
 )__";
-}
+
+} // namespace triangle
 
 GLuint triangle::create_shader(GLenum type, const char* shaderCode)
 {
@@ -175,10 +187,12 @@ bool triangle::setup()
     position_attribute = glGetAttribLocation(program, "a_position");
     texcoord_attribute = glGetAttribLocation(program, "a_texcoord");
     sampler_location = glGetUniformLocation(program, "u_sampler");
+    block_index = glGetUniformBlockIndex(program, "u_fragment");
 
     assert(position_attribute >= 0);
     assert(texcoord_attribute >= 0);
     assert(sampler_location >= 0);
+    assert(block_index >= 0);
 
     GLenum format = GL_RGBA;
     GLenum internalFormat = GL_RGBA;
@@ -210,6 +224,12 @@ bool triangle::setup()
     glBufferData(GL_ARRAY_BUFFER, 64*1024*1024, 0, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+    // up-to 16kb
+    glGenBuffers(1, &ubo);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, 16*1024, 0, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
     return true;
 }
 
@@ -228,11 +248,23 @@ void triangle::begin_frame()
 
 void triangle::render_frame()
 {
+    static float f = 0.f;
     glUseProgram(program);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glUniform1i(sampler_location, 0);
+
+    float c = std::cos(f += 0.11f)*0.5f+0.5f;
+    glm::vec4 color(c, 1., 1., 1.);
+
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::vec4), glm::value_ptr(color));
+    glBindBufferRange(GL_UNIFORM_BUFFER, block_index, ubo, 0, sizeof(glm::vec4));
+    // without below line, bind block_point acording to shader
+    // glUniformBlockBinding(program, block_index, block_point);
+    const GLuint block_point = 0;
+    glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
     float vertices[] = {
         -1.0, -1.0, 0.0, 0.0,
