@@ -64,6 +64,8 @@ namespace triangle
 
     GLuint framebuffer;
     GLuint texture;
+    GLuint vao;
+    GLuint vbo;
 
     GLint position_attribute;
     GLint texcoord_attribute;
@@ -200,6 +202,14 @@ bool triangle::setup()
 
     texture = instance;
 
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, 64*1024*1024, 0, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
     return true;
 }
 
@@ -229,9 +239,12 @@ void triangle::render_frame()
         +3.0, -1.0, 2.0, 0.0,
         -1.0, +3.0, 0.0, 2.0
     };
-    const void* position = vertices;
-    const void* texcoord = &vertices[2];
-    
+    const void* position = (size_t*)0;
+    const void* texcoord = (size_t*)(2*sizeof(float));
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
 
@@ -255,6 +268,8 @@ void triangle::render()
 
 void triangle::cleanup()
 {
+    glDeleteVertexArrays(1, &vao);
+
     glDeleteTextures(1, &texture);
 
     glDeleteProgram(program);
@@ -373,8 +388,8 @@ int main(void)
     glfwWindowHint(GLFW_SAMPLES, samples);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
