@@ -236,11 +236,11 @@ bool simple_render::setup()
 
     texture = instance;
 
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    // glGenVertexArrays(1, &vao);
+    // glBindVertexArray(vao);
 
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    // glGenBuffers(1, &vbo);
+    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     // up-to 16kb
     glGenBuffers(1, &ubo);
@@ -296,14 +296,14 @@ void simple_render::render_delta(int k, float c)
         ex, 1.0, tex, 1.0,
     };
 
-    const void* position = (size_t*)0;
-    const void* texcoord = (size_t*)(2*sizeof(float));
+    const void* position = (size_t*)vertices;
+	const void* texcoord = (size_t*)&vertices[2];
 
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    // glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
@@ -340,11 +340,11 @@ void simple_render::render()
 
 void simple_render::cleanup()
 {
-    glBindVertexArray(0);
-    glDeleteVertexArrays(1, &vao);
+    // glBindVertexArray(0);
+    // glDeleteVertexArrays(1, &vao);
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glDeleteBuffers(1, &vbo);
+    // glBindBuffer(GL_ARRAY_BUFFER, 0);
+    // glDeleteBuffers(1, &vbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
@@ -466,8 +466,8 @@ int main(void)
     glfwWindowHint(GLFW_SAMPLES, samples);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
