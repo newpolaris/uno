@@ -236,8 +236,6 @@ bool triangle::setup()
 
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, 64*1024*1024, 0, GL_DYNAMIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     // up-to 16kb
     glGenBuffers(1, &ubo);
@@ -290,7 +288,7 @@ void triangle::render_frame()
     const void* texcoord = (size_t*)(2*sizeof(float));
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
@@ -315,7 +313,14 @@ void triangle::render()
 
 void triangle::cleanup()
 {
+    glBindVertexArray(0);
     glDeleteVertexArrays(1, &vao);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &vbo);
+
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glDeleteBuffers(1, &ubo);
 
     glDeleteTextures(1, &texture);
 
