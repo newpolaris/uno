@@ -505,15 +505,17 @@ int main(void)
     {
         glfwGetFramebufferSize(window, &width, &height);
 
-        GLuint time_query[2];
-        glGenQueries(2, time_query);
+        GLuint time_queries[3];
+        glGenQueries(3, time_queries);
 
         auto cpu_tick = std::chrono::high_resolution_clock::now();
-        glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
+		glQueryCounter(time_queries[0], GL_TIMESTAMP);
 
         simple_render::render();
 
-        glEndQuery(GL_TIME_ELAPSED);
+		glQueryCounter(time_queries[1], GL_TIMESTAMP);
+
+		glQueryCounter(time_queries[2], GL_TIMESTAMP);
 
         auto cpu_tock = std::chrono::high_resolution_clock::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
@@ -521,13 +523,21 @@ int main(void)
 
         GLint stopTimerAvailable = 0;
         while (!stopTimerAvailable) {
-            glGetQueryObjectiv(time_query[0], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
+            glGetQueryObjectiv(time_queries[2], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
         }
 
         // get query results
-        GLuint64 gpu_elapsed = 0;
-        glGetQueryObjectui64v(time_query[0], GL_QUERY_RESULT, &gpu_elapsed);
+        GLuint64 time_start = 0;
+        GLuint64 time_end = 0;
+        glGetQueryObjectui64v(time_queries[0], GL_QUERY_RESULT, &time_start);
+        glGetQueryObjectui64v(time_queries[1], GL_QUERY_RESULT, &time_end);
+		
+		/*
+		 * profiling detail
+		 * http://developer.download.nvidia.com/opengl/specs/GL_ARB_timer_query.txt
+		 */
 
+		GLuint64 gpu_elapsed = time_end - time_start;
         gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
 
         simple_render::render_ui();
