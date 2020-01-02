@@ -58,17 +58,22 @@ void debug_output(const char* message)
 }
 
 namespace {
+    static int num_frac = 1000;
+
     GLint samples = 4;
     int width = 600;
     int height = 400;
     float cpu_time = 0.f;
     float gpu_time = 0.f;
+
+    uint32_t draw_count = 0;
 }
 
-namespace triangle
+namespace simple_render
 {
     bool setup();
     void render();
+    void render_delta(int k, float c);
     void render_frame();
     void begin_frame();
     void end_frame();
@@ -128,7 +133,7 @@ void main()
 
 } // namespace triangle
 
-GLuint triangle::create_shader(GLenum type, const char* shaderCode)
+GLuint simple_render::create_shader(GLenum type, const char* shaderCode)
 {
     GLuint id = glCreateShader(type);
     if (id == 0)
@@ -152,7 +157,7 @@ GLuint triangle::create_shader(GLenum type, const char* shaderCode)
     return id;
 }
 
-GLuint triangle::create_program(GLuint vertex, GLuint fragment)
+GLuint simple_render::create_program(GLuint vertex, GLuint fragment)
 {
     GLuint id = glCreateProgram();
 
@@ -185,7 +190,7 @@ GLuint triangle::create_program(GLuint vertex, GLuint fragment)
     return id;
 }
 
-bool triangle::setup()
+bool simple_render::setup()
 {
     vertex_shader = create_shader(GL_VERTEX_SHADER, vertex_shader_code);
     if (vertex_shader == GL_NONE)
@@ -222,8 +227,8 @@ bool triangle::setup()
     GLuint instance = 0;
     glGenTextures(1, &instance);
     glBindTexture(GL_TEXTURE_2D, instance);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 2, 2, 0, format, GL_FLOAT, texel);
@@ -246,29 +251,26 @@ bool triangle::setup()
     return true;
 }
 
-void triangle::begin_frame()
+void simple_render::begin_frame()
 { 
+    draw_count = 0;
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     glViewport(0, 0, width, height);
     glClearDepth(1.0);
     glClearColor(0.3f, 0.3f, 0.5f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glEnableVertexAttribArray(position_attribute);
-    glEnableVertexAttribArray(texcoord_attribute);
 }
 
-void triangle::render_frame()
+void simple_render::render_delta(int k, float c)
 {
-    static float f = 0.f;
     glUseProgram(program);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glUniform1i(sampler_location, 0);
 
-    float c = std::cos(f += 0.11f)*0.5f+0.5f;
     glm::vec4 color(c, 1., 1., 1.);
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
@@ -279,13 +281,26 @@ void triangle::render_frame()
     const GLuint block_point = 0;
     glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
+    float sx = -1.0 + 2.0 / num_frac * k;
+    float ex = -1.0 + 2.0 / num_frac * (k + 1);
+    float tsx = 0.0 + 1.0 / num_frac * k;
+    float tex = 0.0 + 1.0 / num_frac * (k + 1);
+
     float vertices[] = {
-        -1.0, -1.0, 0.0, 0.0,
-        +3.0, -1.0, 2.0, 0.0,
-        -1.0, +3.0, 0.0, 2.0
+        sx, -1.0, tsx, 0.0,
+        ex, -1.0, tex, 0.0,
+        sx, 1.0, tsx, 1.0,
+
+        sx, 1.0, tsx, 1.0,
+        ex, -1.0, tex, 0.0,
+        ex, 1.0, tex, 1.0,
     };
+
     const void* position = (size_t*)0;
     const void* texcoord = (size_t*)(2*sizeof(float));
+
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
@@ -293,25 +308,37 @@ void triangle::render_frame()
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
 
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-}
-
-void triangle::end_frame()
-{ 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glDisableVertexAttribArray(position_attribute);
     glDisableVertexAttribArray(texcoord_attribute);
+
+    draw_count++;
 }
 
-void triangle::render()
+void simple_render::render_frame()
+{
+    static float f = 0.f;
+
+    float c = std::cos(f += 0.11f)*0.5f+0.5f;
+
+    for (int i = 0; i < num_frac; i++)
+        render_delta(i, c);
+}
+
+void simple_render::end_frame()
+{ 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void simple_render::render()
 {
     begin_frame();
     render_frame();
     end_frame();
 }
 
-void triangle::cleanup()
+void simple_render::cleanup()
 {
     glBindVertexArray(0);
     glDeleteVertexArrays(1, &vao);
@@ -340,7 +367,7 @@ static void key_callback(GLFWwindow* window, int key, int scancode, int action, 
         glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
-void triangle::render_profile_ui()
+void simple_render::render_profile_ui()
 {
     ImGui::SetNextWindowPos(
         ImVec2(width - 200.f - 10.f, 10.f),
@@ -355,12 +382,13 @@ void triangle::render_profile_ui()
     ImGui::Indent();
     ImGui::Text("CPU %s: %10.5f ms\n", "Main", cpu_time);
     ImGui::Text("GPU %s: %10.5f ms\n", "Main", gpu_time);
+    ImGui::Text("Draw Count: %d\n", draw_count);
     ImGui::Separator();
     ImGui::Unindent();
     ImGui::End();
 }
 
-void triangle::render_ui()
+void simple_render::render_ui()
 {
     ImGui_ImplGlfwGL3_NewFrame();
     render_profile_ui();
@@ -470,7 +498,7 @@ int main(void)
         glDebugMessageCallback(opengl_callback, nullptr);
     }
 
-    triangle::setup();
+    simple_render::setup();
 
     int running = GLFW_TRUE;
     while (running)
@@ -483,7 +511,7 @@ int main(void)
         auto cpu_tick = std::chrono::high_resolution_clock::now();
         glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
 
-        triangle::render();
+        simple_render::render();
 
         glEndQuery(GL_TIME_ELAPSED);
 
@@ -502,7 +530,7 @@ int main(void)
 
         gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
 
-        triangle::render_ui();
+        simple_render::render_ui();
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -510,7 +538,7 @@ int main(void)
             running = GLFW_FALSE;
     }
 
-    triangle::cleanup();
+    simple_render::cleanup();
 
 	ImGui_ImplGlfwGL3_Shutdown();
     glfwHideWindow(window);
