@@ -236,11 +236,11 @@ bool simple_render::setup()
 
     texture = instance;
 
-    // glGenVertexArrays(1, &vao);
-    // glBindVertexArray(vao);
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
 
-    // glGenBuffers(1, &vbo);
-    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     // up-to 16kb
     glGenBuffers(1, &ubo);
@@ -281,34 +281,17 @@ void simple_render::render_delta(int k, float c)
     const GLuint block_point = 0;
     glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
-    float sx = -1.0 + 2.0 / num_frac * k;
-    float ex = -1.0 + 2.0 / num_frac * (k + 1);
-    float tsx = 0.0 + 1.0 / num_frac * k;
-    float tex = 0.0 + 1.0 / num_frac * (k + 1);
-
-    float vertices[] = {
-        sx, -1.0, tsx, 0.0,
-        ex, -1.0, tex, 0.0,
-        sx, 1.0, tsx, 1.0,
-
-        sx, 1.0, tsx, 1.0,
-        ex, -1.0, tex, 0.0,
-        ex, 1.0, tex, 1.0,
-    };
-
-    const void* position = (size_t*)vertices;
-	const void* texcoord = (size_t*)&vertices[2];
-
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 
-    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    // glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
+	const void* position = (size_t*)0;
+	const void* texcoord = (size_t*)(2 * sizeof(float));
 
-    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
-    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
+	glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
+	glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
 
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+	uint32_t indices[6] = { 0, 1, 2, 3, 4, 5 };
+    glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_INT, indices, 6*k);
 
     glDisableVertexAttribArray(position_attribute);
     glDisableVertexAttribArray(texcoord_attribute);
@@ -318,12 +301,36 @@ void simple_render::render_delta(int k, float c)
 
 void simple_render::render_frame()
 {
-    static float f = 0.f;
+	static float f = 0.f;
 
-    float c = std::cos(f += 0.11f)*0.5f+0.5f;
+	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
 
-    for (int i = 0; i < num_frac; i++)
-        render_delta(i, c);
+	std::vector<float[6*4]> buffer(num_frac);
+	for (int i = 0; i < num_frac; i++)
+	{
+		float sx = -1.0 + 2.0 / num_frac * i;
+		float ex = -1.0 + 2.0 / num_frac * (i + 1);
+		float tsx = 0.0 + 1.0 / num_frac * i;
+		float tex = 0.0 + 1.0 / num_frac * (i + 1);
+
+		float vertices[] = {
+			sx, -1.0, tsx, 0.0,
+			ex, -1.0, tex, 0.0,
+			sx, 1.0, tsx, 1.0,
+
+			sx, 1.0, tsx, 1.0,
+			ex, -1.0, tex, 0.0,
+			ex, 1.0, tex, 1.0,
+		};
+
+		memcpy(buffer[i], vertices, sizeof(float) * 6 * 4);
+
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 6 * 4 * num_frac, buffer.data(), GL_STREAM_DRAW);
+
+	for (int i = 0; i < num_frac; i++)
+		render_delta(i, c);
 }
 
 void simple_render::end_frame()
@@ -340,11 +347,11 @@ void simple_render::render()
 
 void simple_render::cleanup()
 {
-    // glBindVertexArray(0);
-    // glDeleteVertexArrays(1, &vao);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
 
-    // glBindBuffer(GL_ARRAY_BUFFER, 0);
-    // glDeleteBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &vbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
@@ -466,8 +473,8 @@ int main(void)
     glfwWindowHint(GLFW_SAMPLES, samples);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
@@ -505,17 +512,15 @@ int main(void)
     {
         glfwGetFramebufferSize(window, &width, &height);
 
-        GLuint time_queries[3];
-        glGenQueries(3, time_queries);
+        GLuint time_query[2];
+        glGenQueries(2, time_query);
 
         auto cpu_tick = std::chrono::high_resolution_clock::now();
-		glQueryCounter(time_queries[0], GL_TIMESTAMP);
+        glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
 
         simple_render::render();
 
-		glQueryCounter(time_queries[1], GL_TIMESTAMP);
-
-		glQueryCounter(time_queries[2], GL_TIMESTAMP);
+        glEndQuery(GL_TIME_ELAPSED);
 
         auto cpu_tock = std::chrono::high_resolution_clock::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
@@ -523,21 +528,13 @@ int main(void)
 
         GLint stopTimerAvailable = 0;
         while (!stopTimerAvailable) {
-            glGetQueryObjectiv(time_queries[2], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
+            glGetQueryObjectiv(time_query[0], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
         }
 
         // get query results
-        GLuint64 time_start = 0;
-        GLuint64 time_end = 0;
-        glGetQueryObjectui64v(time_queries[0], GL_QUERY_RESULT, &time_start);
-        glGetQueryObjectui64v(time_queries[1], GL_QUERY_RESULT, &time_end);
-		
-		/*
-		 * profiling detail
-		 * http://developer.download.nvidia.com/opengl/specs/GL_ARB_timer_query.txt
-		 */
+        GLuint64 gpu_elapsed = 0;
+        glGetQueryObjectui64v(time_query[0], GL_QUERY_RESULT, &gpu_elapsed);
 
-		GLuint64 gpu_elapsed = time_end - time_start;
         gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
 
         simple_render::render_ui();
