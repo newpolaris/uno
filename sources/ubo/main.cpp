@@ -69,6 +69,72 @@ namespace {
     uint32_t draw_count = 0;
 }
 
+typedef uint32_t index_t;
+
+struct vertex_t
+{
+    float pos[2];
+    float uv[2];
+};
+
+struct command_t 
+{
+    int32_t count;
+    int32_t offset;
+};
+
+struct draw_list_t 
+{
+
+    draw_list_t();
+
+    void reserve(int32_t vertex_count, int32_t index_count);
+    void triangles(const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count);
+
+    std::vector<vertex_t> vertices; 
+    std::vector<index_t> indices;
+    std::vector<command_t> commands;
+
+    vertex_t* vertex_pointer;
+    index_t* index_pointer;
+};
+
+draw_list_t::draw_list_t() :
+    vertex_pointer(nullptr),
+    index_pointer(nullptr)
+{
+}
+
+void draw_list_t::reserve(int32_t vertex_count, int32_t index_count)
+{
+    assert(index_count >= 0);
+    assert(vertex_count >= 0);
+
+    size_t old_vertex_size = vertices.size();
+    vertices.resize(old_vertex_size + vertex_count);
+    vertex_pointer = vertices.data();
+    vertex_pointer += old_vertex_size;
+
+    size_t old_index_size = indices.size();
+    indices.resize(old_index_size + index_count);
+    index_pointer = indices.data();
+    index_pointer += old_index_size;
+}
+
+void draw_list_t::triangles(const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count)
+{
+    const size_t index_offset = indices.size();
+    const size_t vertex_offset = vertices.size();
+
+    reserve(vertex_count, index_count);
+    for (int i = 0; i < vertex_count; i++)
+        vertex_pointer[i] = vertex[i];
+    for (int i = 0; i < index_count; i++)
+        index_pointer[i] = index[i] + vertex_offset;
+
+    commands.push_back({ index_count, (int32_t)index_offset });
+}
+
 namespace simple_render
 {
     bool setup();
@@ -88,6 +154,7 @@ namespace simple_render
     GLuint texture;
     GLuint vao;
     GLuint vbo;
+    GLuint ibo;
     GLuint ubo;
 
     GLint position_attribute;
@@ -98,6 +165,8 @@ namespace simple_render
     GLuint vertex_shader;
     GLuint fragment_shader;
     GLuint program;
+
+    draw_list_t draw_list;
 
 const char* vertex_shader_code = R"__(
 #version 330 core
@@ -242,6 +311,9 @@ bool simple_render::setup()
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
+    glGenBuffers(1, &ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+
     // up-to 16kb
     glGenBuffers(1, &ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
@@ -253,8 +325,6 @@ bool simple_render::setup()
 
 void simple_render::begin_frame()
 { 
-    draw_count = 0;
-
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     glViewport(0, 0, width, height);
@@ -275,10 +345,12 @@ void simple_render::render_delta(int k, float c)
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::vec4), glm::value_ptr(color));
+    // since 3.0
     glBindBufferRange(GL_UNIFORM_BUFFER, block_index, ubo, 0, sizeof(glm::vec4));
     // without below line, bind block_point acording to shader
     // glUniformBlockBinding(program, block_index, block_point);
     const GLuint block_point = 0;
+    // since 3.0
     glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
     glEnableVertexAttribArray(position_attribute);
@@ -290,22 +362,27 @@ void simple_render::render_delta(int k, float c)
 	glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
 	glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
 
-	uint32_t indices[6] = { 0, 1, 2, 3, 4, 5 };
-    glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_INT, indices, 6*k);
+    glDrawElements(GL_TRIANGLES, draw_list.commands[k].count, GL_UNSIGNED_INT, (const void*)(draw_list.commands[k].offset * sizeof(4)));
 
     glDisableVertexAttribArray(position_attribute);
     glDisableVertexAttribArray(texcoord_attribute);
 
-    draw_count++;
+    draw_count = draw_list.commands.size();
 }
 
 void simple_render::render_frame()
 {
+	// TODO: move to end_frame etc.
+    draw_list.index_pointer = nullptr;
+    draw_list.vertex_pointer = nullptr;
+    draw_list.vertices.resize(0);
+    draw_list.indices.resize(0);
+    draw_list.commands.resize(0);
+
 	static float f = 0.f;
 
 	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
 
-	std::vector<float[6*4]> buffer(num_frac);
 	for (int i = 0; i < num_frac; i++)
 	{
 		float sx = -1.0 + 2.0 / num_frac * i;
@@ -322,12 +399,21 @@ void simple_render::render_frame()
 			ex, -1.0, tex, 0.0,
 			ex, 1.0, tex, 1.0,
 		};
-
-		memcpy(buffer[i], vertices, sizeof(float) * 6 * 4);
-
+        uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
+        draw_list.triangles((vertex_t*)vertices, 6, indices, 6);
 	}
+
+    GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
+    const void *vertex_buffer_pointer = draw_list.vertices.data();
+
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 6 * 4 * num_frac, buffer.data(), GL_STREAM_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertex_buffer_pointer, GL_STREAM_DRAW);
+
+    GLsizeiptr index_buffer_size = sizeof(index_t) * draw_list.indices.size();
+    const void *index_buffer_pointer = draw_list.indices.data();
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_buffer_size, index_buffer_pointer, GL_STREAM_DRAW);
 
 	for (int i = 0; i < num_frac; i++)
 		render_delta(i, c);
@@ -352,6 +438,9 @@ void simple_render::cleanup()
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glDeleteBuffers(1, &vbo);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &ibo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
