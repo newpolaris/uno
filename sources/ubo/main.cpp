@@ -92,7 +92,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 1000;
+    int num_frac = 10000;
 
     GLint samples = 4;
     int width = 600;
@@ -350,14 +350,11 @@ bool simple_render::setup()
 
     texture = instance;
 
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    // glGenVertexArrays(1, &vao);
+    // glBindVertexArray(vao);
 
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-
-    glGenBuffers(1, &ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    // glGenBuffers(1, &vbo);
+    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     // up-to 16kb
     glGenBuffers(1, &ubo);
@@ -376,6 +373,8 @@ void simple_render::begin_frame()
     glClearDepth(1.0);
     glClearColor(0.3f, 0.3f, 0.5f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    draw_count = 0;
 }
 
 struct uniform_block
@@ -408,70 +407,49 @@ void simple_render::render_delta(int k, float c)
     // since 3.0
     glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
-    glEnableVertexAttribArray(position_attribute);
-    glEnableVertexAttribArray(texcoord_attribute);
-
-	const void* position = (size_t*)0;
-	const void* texcoord = (size_t*)(2 * sizeof(float));
-
-	glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
-	glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
-
-    glDrawElements(GL_TRIANGLES, draw_list.commands[k].count, GL_UNSIGNED_INT, (const void*)(draw_list.commands[k].offset * sizeof(4)));
-
-    glDisableVertexAttribArray(position_attribute);
-    glDisableVertexAttribArray(texcoord_attribute);
-
-    draw_count = draw_list.commands.size();
-}
-
-void simple_render::render_frame()
-{
-	// TODO: move to end_frame etc.
-    draw_list.index_pointer = nullptr;
-    draw_list.vertex_pointer = nullptr;
-    draw_list.vertices.resize(0);
-    draw_list.indices.resize(0);
-    draw_list.commands.resize(0);
-
-	static float f = 0.f;
-
-	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
-
-	for (int i = 0; i < num_frac; i++)
-	{
-		float sx = -1.f + 2.f / num_frac * i;
-		float ex = -1.f + 2.f / num_frac * (i + 1);
-		float tsx = 0.f + 1.f / num_frac * i;
-		float tex = 0.f + 1.f / num_frac * (i + 1);
+    float sx = -1.0 + 2.0 / num_frac * k;
+    float ex = -1.0 + 2.0 / num_frac * (k + 1);
+    float tsx = 0.0 + 1.0 / num_frac * k;
+    float tex = 0.0 + 1.0 / num_frac * (k + 1);
 
 		float vertices[] = {
 			sx, -1.0, tsx, 0.0,
 			ex, -1.0, tex, 0.0,
 			sx, 1.0, tsx, 1.0,
 
-			sx, 1.0, tsx, 1.0,
-			ex, -1.0, tex, 0.0,
-			ex, 1.0, tex, 1.0,
-		};
-        uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
-        draw_list.triangles((vertex_t*)vertices, 6, indices, 6);
-	}
+        sx, 1.0, tsx, 1.0,
+        ex, -1.0, tex, 0.0,
+        ex, 1.0, tex, 1.0,
+    };
 
-    GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
-    const void *vertex_buffer_pointer = draw_list.vertices.data();
+    const void* position = (size_t*)vertices;
+	const void* texcoord = (size_t*)&vertices[2];
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertex_buffer_pointer, GL_STREAM_DRAW);
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
 
-    GLsizeiptr index_buffer_size = sizeof(index_t) * draw_list.indices.size();
-    const void *index_buffer_pointer = draw_list.indices.data();
+    // glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    // glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STREAM_DRAW);
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_buffer_size, index_buffer_pointer, GL_STREAM_DRAW);
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
 
-	for (int i = 0; i < num_frac; i++)
-		render_delta(i, c);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glDisableVertexAttribArray(position_attribute);
+    glDisableVertexAttribArray(texcoord_attribute);
+
+    draw_count++;
+}
+
+void simple_render::render_frame()
+{
+    static float f = 0.f;
+
+    float c = std::cos(f += 0.11f)*0.5f+0.5f;
+
+    for (int i = 0; i < num_frac; i++)
+        render_delta(i, c);
 }
 
 void simple_render::end_frame()
@@ -488,14 +466,11 @@ void simple_render::render()
 
 void simple_render::cleanup()
 {
-    glBindVertexArray(0);
-    glDeleteVertexArrays(1, &vao);
+    // glBindVertexArray(0);
+    // glDeleteVertexArrays(1, &vao);
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glDeleteBuffers(1, &vbo);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glDeleteBuffers(1, &ibo);
+    // glBindBuffer(GL_ARRAY_BUFFER, 0);
+    // glDeleteBuffers(1, &vbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
@@ -618,8 +593,8 @@ int main(void)
     glfwWindowHint(GLFW_SAMPLES, samples);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
