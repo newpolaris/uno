@@ -1,5 +1,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <stb_image.h>
 #include <imgui.h>
 #include <imgui_impl_glfw_gl3.h>
 #include <glm/glm.hpp>
@@ -13,6 +14,39 @@
 #include <chrono>
 #include <vector>
 #include <sstream>
+
+const char* vertex_shader_code = R"__(
+#version 330 core
+
+layout(location = 0) in vec2 a_position;
+layout(location = 1) in vec2 a_texcoord;
+out vec2 v_texcoord;
+
+void main()
+{
+    v_texcoord = a_texcoord;
+    gl_Position = vec4(a_position, 0, 1);
+}
+)__";
+
+const char* fragment_shader_code = R"__(
+#version 330 core
+
+uniform sampler2D u_sampler;
+layout(std140) uniform u_fragment
+{
+    vec4 data[4];
+} u_frag;
+
+in vec2 v_texcoord;
+out vec4 color_out;
+
+void main()
+{
+    color_out = texture(u_sampler, v_texcoord) * vec4(u_frag.data[0].rrr, 1.0);
+}
+)__";
+
 
 #if _WIN32
 extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
@@ -58,7 +92,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    static int num_frac = 1000;
+    int num_frac = 100;
 
     GLint samples = 4;
     int width = 600;
@@ -149,6 +183,7 @@ namespace simple_render
 
     GLuint create_shader(GLenum type, const char* shaderCode);
     GLuint create_program(GLuint vertex, GLuint fragment);
+    GLuint create_texture(std::string path);
 
     GLuint framebuffer;
     GLuint texture;
@@ -167,38 +202,6 @@ namespace simple_render
     GLuint program;
 
     draw_list_t draw_list;
-
-const char* vertex_shader_code = R"__(
-#version 330 core
-
-layout(location = 0) in vec2 a_position;
-layout(location = 1) in vec2 a_texcoord;
-out vec2 v_texcoord;
-
-void main()
-{
-    v_texcoord = a_texcoord;
-    gl_Position = vec4(a_position, 0, 1);
-}
-)__";
-
-const char* fragment_shader_code = R"__(
-#version 330 core
-
-uniform sampler2D u_sampler;
-layout(std140) uniform u_fragment
-{
-    vec4 color;
-} u_frag;
-
-in vec2 v_texcoord;
-out vec4 color_out;
-
-void main()
-{
-    color_out = texture(u_sampler, v_texcoord) * u_frag.color;
-}
-)__";
 
 } // namespace triangle
 
@@ -257,6 +260,47 @@ GLuint simple_render::create_program(GLuint vertex, GLuint fragment)
     }
 
     return id;
+}
+
+GLuint simple_render::create_texture(std::string path)
+{
+    stbi_set_flip_vertically_on_load(true);
+
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (fp == NULL) 
+        return 0;
+
+    fseek(fp, 0, SEEK_END);
+    long length = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    std::vector<char> storage(length);;
+    length = fread(storage.data(), 1, length, fp);
+    fclose(fp);
+
+	GLenum target = GL_TEXTURE_2D;
+    GLenum type = GL_UNSIGNED_BYTE;
+    int width = 0, height = 0, nrComponents = 0;
+    stbi_uc* imagedata = stbi_load_from_memory((stbi_uc*)storage.data(), (int)length, &width, &height, &nrComponents, 0);
+    if (!imagedata) 
+        return 0;
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    GLuint instance = 0;
+    glGenTextures(1, &instance);
+    glBindTexture(target, instance);
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(target, 0, GL_RGB, width, height, 0, GL_RGB, type, imagedata);
+    glBindTexture(target, 0);
+
+    stbi_image_free(imagedata);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    return instance;
 }
 
 bool simple_render::setup()
@@ -333,18 +377,28 @@ void simple_render::begin_frame()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+struct uniform_block
+{
+    glm::vec4 data[4];
+};
+
 void simple_render::render_delta(int k, float c)
 {
     glUseProgram(program);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
+    // initialize once will be ok
     glUniform1i(sampler_location, 0);
 
-    glm::vec4 color(c, 1., 1., 1.);
+    uniform_block block;
+    memset(&block, 0, sizeof(block));
+
+    block.data[0].r = float(k+1) / num_frac;
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::vec4), glm::value_ptr(color));
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(block), &block);
+
     // since 3.0
     glBindBufferRange(GL_UNIFORM_BUFFER, block_index, ubo, 0, sizeof(glm::vec4));
     // without below line, bind block_point acording to shader
@@ -385,10 +439,10 @@ void simple_render::render_frame()
 
 	for (int i = 0; i < num_frac; i++)
 	{
-		float sx = -1.0 + 2.0 / num_frac * i;
-		float ex = -1.0 + 2.0 / num_frac * (i + 1);
-		float tsx = 0.0 + 1.0 / num_frac * i;
-		float tex = 0.0 + 1.0 / num_frac * (i + 1);
+		float sx = -1.f + 2.f / num_frac * i;
+		float ex = -1.f + 2.f / num_frac * (i + 1);
+		float tsx = 0.f + 1.f / num_frac * i;
+		float tex = 0.f + 1.f / num_frac * (i + 1);
 
 		float vertices[] = {
 			sx, -1.0, tsx, 0.0,
@@ -574,7 +628,7 @@ int main(void)
 
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-    glfwSwapInterval(1);
+    glfwSwapInterval(0);
     glfwSetKeyCallback(window, key_callback);
 
     ImGui_ImplGlfwGL3_Init(window, false);
@@ -596,35 +650,46 @@ int main(void)
 
     simple_render::setup();
 
+    // https://www.khronos.org/registry/OpenGL/extensions/ARB/ARB_timer_query.txt
+
+    GLuint query;
+    bool query_issued = false;
+    bool wait_gpu = false;
     int running = GLFW_TRUE;
+
     while (running)
     {
         glfwGetFramebufferSize(window, &width, &height);
 
-        GLuint time_query[2];
-        glGenQueries(2, time_query);
+        if (!query_issued) {
+            glGenQueries(1, &query);
+            glBeginQuery(GL_TIME_ELAPSED, query);
+            query_issued = true;
+        }
 
         auto cpu_tick = std::chrono::high_resolution_clock::now();
-        glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
 
         simple_render::render();
-
-        glEndQuery(GL_TIME_ELAPSED);
 
         auto cpu_tock = std::chrono::high_resolution_clock::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
         cpu_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
 
-        GLint stopTimerAvailable = 0;
-        while (!stopTimerAvailable) {
-            glGetQueryObjectiv(time_query[0], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
+        if (query_issued && !wait_gpu) {
+            glEndQuery(GL_TIME_ELAPSED);
+            wait_gpu = true;
         }
 
-        // get query results
-        GLuint64 gpu_elapsed = 0;
-        glGetQueryObjectui64v(time_query[0], GL_QUERY_RESULT, &gpu_elapsed);
+        GLint stopTimerAvailable = 0;
+        glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
 
-        gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
+        if (stopTimerAvailable) {
+            GLuint64 result_time;
+            glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
+            wait_gpu = false;
+            query_issued = false;
+            gpu_time = static_cast<float>(result_time / 1e6f);
+        }
 
         simple_render::render_ui();
 
