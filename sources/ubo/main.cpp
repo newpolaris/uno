@@ -92,7 +92,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 2000;
+    int num_frac = 10000;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -392,6 +392,8 @@ bool simple_render::setup()
 
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
+	
+	glBindVertexArray(0);
 
     return true;
 }
@@ -555,6 +557,7 @@ void simple_render::render_profile_ui()
     ImGui::Text("Draw Count: %d\n", draw_count);
     ImGui::Separator();
     ImGui::Unindent();
+    ImGui::SliderInt("", &num_frac, 1000, 10000);
     ImGui::End();
 }
 
