@@ -92,13 +92,14 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 100;
+    int num_frac = 1000;
 
     GLint samples = 4;
     int width = 600;
     int height = 400;
     float cpu_time = 0.f;
     float gpu_time = 0.f;
+    float draws_per_sec = 0.f;
 
     uint32_t draw_count = 0;
 }
@@ -532,6 +533,7 @@ void simple_render::render_profile_ui()
     ImGui::Indent();
     ImGui::Text("CPU %s: %10.5f ms\n", "Main", cpu_time);
     ImGui::Text("GPU %s: %10.5f ms\n", "Main", gpu_time);
+    ImGui::Text("Draws/s: %.2f", draws_per_sec);
     ImGui::Text("Draw Count: %d\n", draw_count);
     ImGui::Separator();
     ImGui::Unindent();
@@ -673,7 +675,7 @@ int main(void)
 
         auto cpu_tock = std::chrono::high_resolution_clock::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
-        cpu_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
+        auto cpu_frame = static_cast<float>(cpu_elapsed.count() / 1000.0);
 
         if (query_issued && !wait_gpu) {
             glEndQuery(GL_TIME_ELAPSED);
@@ -688,7 +690,12 @@ int main(void)
             glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
             wait_gpu = false;
             query_issued = false;
-            gpu_time = static_cast<float>(result_time / 1e6f);
+            auto gpu_frame = static_cast<float>(result_time / 1e6f);
+
+            cpu_time = cpu_time * 0.95 + cpu_frame * 0.05;
+            gpu_time = gpu_time * 0.95 + gpu_frame * 0.05;
+
+            draws_per_sec = draw_count / (gpu_time * 1e-3);
         }
 
         simple_render::render_ui();
