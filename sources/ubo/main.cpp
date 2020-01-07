@@ -95,6 +95,7 @@ namespace {
     int num_frac = 1000;
 
     GLint samples = 4;
+    GLint uniform_alignment = 0;
     int width = 600;
     int height = 400;
     float cpu_time = 0.f;
@@ -116,19 +117,33 @@ struct command_t
 {
     int32_t count;
     int32_t offset;
+
+    struct uniform_t {
+        GLuint index;
+        GLuint offset;
+        GLuint size;
+    } uniform;
+};
+
+struct uniform_block_t
+{
+    union {
+        glm::vec4 data[4];
+        uint8_t _[256];
+    };
 };
 
 struct draw_list_t 
 {
-
     draw_list_t();
 
     void reserve(int32_t vertex_count, int32_t index_count);
-    void triangles(const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count);
+    void triangles(const uniform_block_t& uniform, const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count);
 
     std::vector<vertex_t> vertices; 
     std::vector<index_t> indices;
     std::vector<command_t> commands;
+    std::vector<uniform_block_t> uniforms[8];
 
     vertex_t* vertex_pointer;
     index_t* index_pointer;
@@ -156,7 +171,7 @@ void draw_list_t::reserve(int32_t vertex_count, int32_t index_count)
     index_pointer += old_index_size;
 }
 
-void draw_list_t::triangles(const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count)
+void draw_list_t::triangles(const uniform_block_t& uniform, const vertex_t* vertex, int32_t vertex_count, const index_t* index, int32_t index_count)
 {
     const size_t index_offset = indices.size();
     const size_t vertex_offset = vertices.size();
@@ -167,7 +182,15 @@ void draw_list_t::triangles(const vertex_t* vertex, int32_t vertex_count, const 
     for (int i = 0; i < index_count; i++)
         index_pointer[i] = index[i] + vertex_offset;
 
-    commands.push_back({ index_count, (int32_t)index_offset });
+    command_t command = {0, };
+    command.count = index_count;
+    command.offset = (int32_t)index_offset;
+    command.uniform.index = 0;
+    command.uniform.offset = sizeof(uniform_block_t) * uniforms[0].size();
+    command.uniform.size = sizeof(uniform_block_t);
+    commands.push_back(command);
+
+    uniforms[0].push_back(uniform);
 }
 
 namespace simple_render
@@ -359,11 +382,7 @@ bool simple_render::setup()
     glGenBuffers(1, &ibo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 
-    // up-to 16kb
     glGenBuffers(1, &ubo);
-    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-    glBufferData(GL_UNIFORM_BUFFER, 16*1024, 0, GL_DYNAMIC_DRAW);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     return true;
 }
@@ -378,11 +397,6 @@ void simple_render::begin_frame()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-struct uniform_block
-{
-    glm::vec4 data[4];
-};
-
 void simple_render::render_delta(int k, float c)
 {
     glUseProgram(program);
@@ -392,30 +406,17 @@ void simple_render::render_delta(int k, float c)
     // initialize once will be ok
     glUniform1i(sampler_location, 0);
 
-    uniform_block block;
-    memset(&block, 0, sizeof(block));
-
-    block.data[0].r = float(k+1) / num_frac;
-
-    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(block), &block);
-
-    // since 3.0
-    glBindBufferRange(GL_UNIFORM_BUFFER, block_index, ubo, 0, sizeof(glm::vec4));
-    // without below line, bind block_point acording to shader
-    // glUniformBlockBinding(program, block_index, block_point);
-    const GLuint block_point = 0;
-    // since 3.0
-    glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
+    auto ubo = draw_list.commands[k].uniform;
+    glBindBufferRange(GL_UNIFORM_BUFFER, block_index, simple_render::ubo, ubo.offset, ubo.size);
 
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 
-	const void* position = (size_t*)0;
-	const void* texcoord = (size_t*)(2 * sizeof(float));
+    const void* position = (size_t*)0;
+    const void* texcoord = (size_t*)(2 * sizeof(float));
 
-	glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
-	glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
 
     glDrawElements(GL_TRIANGLES, draw_list.commands[k].count, GL_UNSIGNED_INT, (const void*)(draw_list.commands[k].offset * sizeof(4)));
 
@@ -433,6 +434,7 @@ void simple_render::render_frame()
     draw_list.vertices.resize(0);
     draw_list.indices.resize(0);
     draw_list.commands.resize(0);
+    draw_list.uniforms[0].resize(0);
 
 	static float f = 0.f;
 
@@ -455,7 +457,12 @@ void simple_render::render_frame()
 			ex, 1.0, tex, 1.0,
 		};
         uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
-        draw_list.triangles((vertex_t*)vertices, 6, indices, 6);
+
+        uniform_block_t block;
+        memset(&block, 0, sizeof(block));
+        block.data[0].r = float(i + 1) / num_frac;
+
+        draw_list.triangles(block, (vertex_t*)vertices, 6, indices, 6);
 	}
 
     GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
@@ -469,6 +476,19 @@ void simple_render::render_frame()
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_buffer_size, index_buffer_pointer, GL_STREAM_DRAW);
+
+    GLsizeiptr ubo_buffer_size = sizeof(uniform_block_t) * draw_list.uniforms[0].size();
+    const void *ubo_buffer_pointer = draw_list.uniforms[0].data();
+
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, ubo_buffer_size, ubo_buffer_pointer, GL_DYNAMIC_DRAW);
+
+    // since 3.0
+    // without below line, bind block_point acording to shader
+    // glUniformBlockBinding(program, block_index, block_point);
+    const GLuint block_point = 0;
+    // since 3.0
+    glBindBufferBase(GL_UNIFORM_BUFFER, block_point, ubo);
 
 	for (int i = 0; i < num_frac; i++)
 		render_delta(i, c);
@@ -618,8 +638,8 @@ int main(void)
     glfwWindowHint(GLFW_SAMPLES, samples);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
@@ -649,6 +669,8 @@ int main(void)
         glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
         glDebugMessageCallback(opengl_callback, nullptr);
     }
+
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_alignment);
 
     simple_render::setup();
 
