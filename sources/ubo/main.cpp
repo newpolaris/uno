@@ -92,7 +92,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 2000;
+    int num_frac = 10000;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -384,15 +384,6 @@ bool simple_render::setup()
 
     glGenBuffers(1, &ubo);
 
-    glEnableVertexAttribArray(position_attribute);
-    glEnableVertexAttribArray(texcoord_attribute);
-
-    const void* position = (size_t*)0;
-    const void* texcoord = (size_t*)(2 * sizeof(float));
-
-    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
-    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
-
     return true;
 }
 
@@ -484,12 +475,22 @@ void simple_render::render_frame()
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
 
-    glBindVertexArray(vao);
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
+
+    const void* position = (size_t*)0;
+    const void* texcoord = (size_t*)(2 * sizeof(float));
+
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
+	
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	for (int i = 0; i < num_frac; i++)
 		render_delta(i, c);
 
-    glBindVertexArray(0);
+    glDisableVertexAttribArray(position_attribute);
+    glDisableVertexAttribArray(texcoord_attribute);
 }
 
 void simple_render::end_frame()
@@ -555,6 +556,7 @@ void simple_render::render_profile_ui()
     ImGui::Text("Draw Count: %d\n", draw_count);
     ImGui::Separator();
     ImGui::Unindent();
+    ImGui::SliderInt("", &num_frac, 1000, 10000);
     ImGui::End();
 }
 
