@@ -101,6 +101,7 @@ namespace {
     float cpu_time = 0.f;
     float gpu_time = 0.f;
     float draws_per_sec = 0.f;
+    float per_frame_sec = 0.f;
 
     uint32_t draw_count = 0;
 }
@@ -415,17 +416,6 @@ void simple_render::begin_frame()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void simple_render::render_delta(int k, float c)
-{
-    const auto& call = draw_commands[k];
-
-    assert(call.uniforms.size() == 1);
-    for (auto ubo : call.uniforms)
-        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
-
-    glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
-}
-
 void simple_render::render_frame()
 {
 	// TODO: move to end_frame etc.
@@ -528,12 +518,6 @@ void simple_render::render_frame()
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 
-    const void* position = (size_t*)0;
-    const void* texcoord = (size_t*)(2 * sizeof(float));
-
-    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
-    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
-
 	for (int i = 0; i < num_frac; i++)
 		render_delta(i, c);
 
@@ -541,6 +525,26 @@ void simple_render::render_frame()
     glDisableVertexAttribArray(texcoord_attribute);
 
     draw_count = num_frac;
+}
+
+void simple_render::render_delta(int k, float c)
+{
+    const auto& call = draw_commands[k];
+
+    assert(call.uniforms.size() == 1);
+    for (auto ubo : call.uniforms)
+        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
+
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+
+    const void* position = (size_t*)0;
+    const void* texcoord = (size_t*)(2 * sizeof(float));
+
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
+
+    glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
 }
 
 void simple_render::end_frame()
@@ -604,6 +608,7 @@ void simple_render::render_profile_ui()
     ImGui::Text("GPU %s: %10.5f ms\n", "Main", gpu_time);
     ImGui::Text("Draws/s: %.2f", draws_per_sec);
     ImGui::Text("Draw Count: %d\n", draw_count);
+    ImGui::Text("FPS: %f\n", 1.f/per_frame_sec);
     ImGui::Separator();
     ImGui::Unindent();
     ImGui::SliderInt("", &num_frac, 1000, 10000);
@@ -731,6 +736,8 @@ int main(void)
     bool wait_gpu = false;
     int running = GLFW_TRUE;
 
+    auto a = std::chrono::high_resolution_clock::now();
+
     while (running)
     {
         glfwGetFramebufferSize(window, &width, &height);
@@ -749,6 +756,8 @@ int main(void)
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
         auto cpu_frame = static_cast<float>(cpu_elapsed.count() / 1000.0);
 
+        cpu_time = glm::mix(cpu_time, cpu_frame, 0.05);
+
         if (query_issued && !wait_gpu) {
             glEndQuery(GL_TIME_ELAPSED);
             wait_gpu = true;
@@ -764,13 +773,19 @@ int main(void)
             query_issued = false;
             auto gpu_frame = static_cast<float>(result_time / 1e6f);
 
-            cpu_time = cpu_time * 0.95f + cpu_frame * 0.05f;
-            gpu_time = gpu_time * 0.95f + gpu_frame * 0.05f;
+            gpu_time = glm::mix(gpu_time, gpu_frame, 0.05);
 
             draws_per_sec = draw_count / (gpu_time * 1e-3f);
         }
 
         simple_render::render_ui();
+        auto b = std::chrono::high_resolution_clock::now();
+        auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a);
+        auto d = static_cast<float>(c.count() * 1e-6);
+
+        a = b;
+
+        per_frame_sec = glm::mix(per_frame_sec, d, 0.05);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
