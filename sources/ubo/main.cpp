@@ -15,7 +15,9 @@
 #include <vector>
 #include <sstream>
 
-const char* vertex_shader_code = R"__(
+namespace gl3 {
+    
+    const char* vertex_shader_code = R"__(
 #version 330 core
 
 layout(location = 0) in vec2 a_position;
@@ -29,7 +31,7 @@ void main()
 }
 )__";
 
-const char* fragment_shader_code = R"__(
+    const char* fragment_shader_code = R"__(
 #version 330 core
 
 uniform sampler2D u_sampler;
@@ -46,7 +48,42 @@ void main()
     color_out = texture(u_sampler, v_texcoord) * vec4(u_frag.data[0].rrr, 1.0);
 }
 )__";
+}
 
+namespace gl2
+{ 
+    const char* vertex_shader_code = R"__(
+#version 120
+
+attribute vec2 a_position;
+attribute vec2 a_texcoord;
+varying vec2 v_texcoord;
+
+void main()
+{
+    v_texcoord = a_texcoord;
+    gl_Position = vec4(a_position, 0, 1);
+}
+)__";
+
+    const char* fragment_shader_code = R"__(
+#version 120
+
+struct u_frags
+{
+    vec4 data[4];
+};
+
+uniform u_frags u_frag;
+uniform sampler2D u_sampler;
+varying vec2 v_texcoord;
+
+void main()
+{
+    gl_FragColor = texture2D(u_sampler, v_texcoord) * vec4(u_frag.data[0].rrr, 1.0);
+}
+)__";
+}
 
 #if _WIN32
 extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
@@ -92,7 +129,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 10000;
+    int num_frac = 1000;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -104,6 +141,18 @@ namespace {
     float per_frame_sec = 0.f;
 
     uint32_t draw_count = 0;
+
+#define USE_CORE_PROFILE 1
+
+#if USE_CORE_PROFILE
+    int major = 4;
+    int minor = 1;
+    int profile = GLFW_OPENGL_CORE_PROFILE;
+    int forward = GLFW_TRUE;
+#else
+    int major = 2;
+    int minor = 1;
+#endif
 }
 
 typedef uint32_t index_t;
@@ -129,7 +178,7 @@ struct draw_command_t
     };
 
     mesh_t mesh;
-    std::vector<uniform_t> uniforms;
+    uniform_t uniform;
 };
 
 struct uniform_t
@@ -202,48 +251,28 @@ void draw_list_t::draw(const vertex_t* vertex, int32_t vertex_count, const index
     commands.push_back({index_count, (int32_t)index_offset});
 }
 
-namespace simple_render
+struct renderer_opengl_t
 {
-    bool setup();
-    void render();
-    void render_delta(int k, float c);
-    void render_frame();
-    void begin_frame();
-    void end_frame();
-    void render_ui();
-    void render_profile_ui();
-    void cleanup();
+public:
 
-    GLuint create_shader(GLenum type, const char* shaderCode);
-    GLuint create_program(GLuint vertex, GLuint fragment);
-    GLuint create_texture(std::string path);
+    virtual bool setup();
+    virtual void begin_frame();
+    virtual void end_frame();
+    virtual void uniform(const uniform_t& uniform) = 0;
+    virtual void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) = 0;
 
-    GLuint framebuffer;
+    virtual void render_ui();
+    virtual void render_profile_ui();
+    virtual void cleanup();
+
+    virtual GLuint create_shader(GLenum type, const char* shaderCode);
+    virtual GLuint create_program(GLuint vertex, GLuint fragment);
+    virtual GLuint create_texture(std::string path);
+
     GLuint texture;
-    GLuint vao;
-    GLuint vbo;
-    GLuint ibo;
-    GLuint ubo;
+};
 
-    GLint position_attribute;
-    GLint texcoord_attribute;
-    GLint sampler_location;
-    GLint block_index;
-
-    GLuint vertex_shader;
-    GLuint fragment_shader;
-    GLuint program;
-
-    draw_list_t draw_list;
-
-    std::vector<uniform_t> uniforms;
-    std::vector<char> uniform_buffer;
-
-    std::vector<draw_command_t> draw_commands;
-
-} // namespace triangle
-
-GLuint simple_render::create_shader(GLenum type, const char* shaderCode)
+GLuint renderer_opengl_t::create_shader(GLenum type, const char* shaderCode)
 {
     GLuint id = glCreateShader(type);
     if (id == 0)
@@ -267,7 +296,7 @@ GLuint simple_render::create_shader(GLenum type, const char* shaderCode)
     return id;
 }
 
-GLuint simple_render::create_program(GLuint vertex, GLuint fragment)
+GLuint renderer_opengl_t::create_program(GLuint vertex, GLuint fragment)
 {
     GLuint id = glCreateProgram();
 
@@ -300,7 +329,7 @@ GLuint simple_render::create_program(GLuint vertex, GLuint fragment)
     return id;
 }
 
-GLuint simple_render::create_texture(std::string path)
+GLuint renderer_opengl_t::create_texture(std::string path)
 {
     stbi_set_flip_vertically_on_load(true);
 
@@ -341,35 +370,8 @@ GLuint simple_render::create_texture(std::string path)
     return instance;
 }
 
-bool simple_render::setup()
+bool renderer_opengl_t::setup()
 {
-    vertex_shader = create_shader(GL_VERTEX_SHADER, vertex_shader_code);
-    if (vertex_shader == GL_NONE)
-        return false;
-
-    fragment_shader = create_shader(GL_FRAGMENT_SHADER, fragment_shader_code);
-    if (fragment_shader == GL_NONE)
-        return false;
-
-    program = create_program(vertex_shader, fragment_shader);
-    if (program == GL_NONE)
-        return false;
-
-    position_attribute = glGetAttribLocation(program, "a_position");
-    texcoord_attribute = glGetAttribLocation(program, "a_texcoord");
-    sampler_location = glGetUniformLocation(program, "u_sampler");
-    block_index = glGetUniformBlockIndex(program, "u_fragment");
-
-    assert(position_attribute >= 0);
-    assert(texcoord_attribute >= 0);
-    assert(sampler_location >= 0);
-    assert(block_index >= 0);
-
-    glUseProgram(program);
-
-    // initialize once will be ok
-    glUniform1i(sampler_location, 0);
-
     GLenum format = GL_RGBA;
     GLenum internalFormat = GL_RGBA;
 
@@ -392,6 +394,201 @@ bool simple_render::setup()
 
     texture = instance;
 
+    return true;
+}
+
+void renderer_opengl_t::begin_frame()
+{ 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glViewport(0, 0, width, height);
+    glClearDepth(1.0);
+    glClearColor(0.3f, 0.3f, 0.5f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    draw_count = num_frac;
+}
+
+void renderer_opengl_t::end_frame()
+{ 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void renderer_opengl_t::cleanup()
+{
+    glDeleteTextures(1, &texture);
+}
+
+class renderer_gl2_t : public renderer_opengl_t
+{
+public:
+
+    bool setup() override;
+    void begin_frame() override;
+    void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
+    void uniform(const uniform_t& uniform) override;
+    void end_frame() override;
+    void cleanup() override;
+
+    GLint position_attribute;
+    GLint texcoord_attribute;
+    GLint sampler_location;
+    GLint uniform_location[4];
+
+    GLuint vertex_shader;
+    GLuint fragment_shader;
+    GLuint program;
+};
+
+bool renderer_gl2_t::setup()
+{
+    renderer_opengl_t::setup();
+
+    vertex_shader = create_shader(GL_VERTEX_SHADER, gl2::vertex_shader_code);
+    if (vertex_shader == GL_NONE)
+        return false;
+
+    fragment_shader = create_shader(GL_FRAGMENT_SHADER, gl2::fragment_shader_code);
+    if (fragment_shader == GL_NONE)
+        return false;
+
+    program = create_program(vertex_shader, fragment_shader);
+    if (program == GL_NONE)
+        return false;
+
+    position_attribute = glGetAttribLocation(program, "a_position");
+    texcoord_attribute = glGetAttribLocation(program, "a_texcoord");
+    sampler_location = glGetUniformLocation(program, "u_sampler");
+    uniform_location[0] = glGetUniformLocation(program, "u_frag.data[0]");
+    uniform_location[1] = glGetUniformLocation(program, "u_frag.data[1]");
+    uniform_location[2] = glGetUniformLocation(program, "u_frag.data[2]");
+    uniform_location[3] = glGetUniformLocation(program, "u_frag.data[3]");
+
+    assert(position_attribute >= 0);
+    assert(texcoord_attribute >= 0);
+    assert(sampler_location >= 0);
+    assert(uniform_location[0] >= 0);
+
+    glUseProgram(program);
+
+    // initialize once will be ok
+    glUniform1i(sampler_location, 0);
+
+    return true;
+}
+
+void renderer_gl2_t::begin_frame()
+{
+    renderer_opengl_t::begin_frame();
+
+    glUseProgram(program);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
+}
+
+void renderer_gl2_t::draw(vertex_t* vertices, int vertex_count, index_t*, int)
+{
+    const void* position = (size_t*)&vertices->pos;
+	const void* texcoord = (size_t*)&vertices->uv;
+
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), texcoord);
+
+    glDrawArrays(GL_TRIANGLES, 0, vertex_count);
+}
+
+void renderer_gl2_t::uniform(const uniform_t& uniform)
+{
+    glUniform4fv(uniform_location[0], 1, (const float*)&uniform.data[0]);
+    glUniform4fv(uniform_location[1], 1, (const float*)&uniform.data[1]);
+    glUniform4fv(uniform_location[2], 1, (const float*)&uniform.data[2]);
+    glUniform4fv(uniform_location[3], 1, (const float*)&uniform.data[3]);
+}
+
+void renderer_gl2_t::end_frame() 
+{
+    renderer_opengl_t::end_frame();
+
+    glDisableVertexAttribArray(position_attribute);
+    glDisableVertexAttribArray(texcoord_attribute);
+}
+
+void renderer_gl2_t::cleanup()
+{
+    renderer_opengl_t::cleanup();
+
+    glDeleteProgram(program);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+}
+
+class renderer_gl3_t : public renderer_opengl_t
+{
+public:
+
+    bool setup() override;
+    void begin_frame() override;
+    void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
+    void uniform(const uniform_t& uniform) override;
+    void end_frame() override;
+    void cleanup() override;
+
+    GLint position_attribute;
+    GLint texcoord_attribute;
+    GLint sampler_location;
+
+    GLuint vertex_shader;
+    GLuint fragment_shader;
+    GLuint program;
+
+    GLuint vao;
+    GLuint vbo;
+    GLuint ibo;
+    GLuint ubo;
+    GLint block_index;
+    draw_list_t draw_list;
+
+    std::vector<uniform_t> uniforms;
+    std::vector<char> uniform_buffer;
+
+    std::vector<draw_command_t> draw_commands;
+};
+
+bool renderer_gl3_t::setup()
+{
+    renderer_opengl_t::setup();
+
+    vertex_shader = create_shader(GL_VERTEX_SHADER, gl3::vertex_shader_code);
+    if (vertex_shader == GL_NONE)
+        return false;
+
+    fragment_shader = create_shader(GL_FRAGMENT_SHADER, gl3::fragment_shader_code);
+    if (fragment_shader == GL_NONE)
+        return false;
+
+    program = create_program(vertex_shader, fragment_shader);
+    if (program == GL_NONE)
+        return false;
+
+    position_attribute = glGetAttribLocation(program, "a_position");
+    texcoord_attribute = glGetAttribLocation(program, "a_texcoord");
+    sampler_location = glGetUniformLocation(program, "u_sampler");
+    block_index = glGetUniformBlockIndex(program, "u_fragment");
+
+    assert(position_attribute >= 0);
+    assert(texcoord_attribute >= 0);
+    assert(sampler_location >= 0);
+    assert(block_index >= 0);
+
+    glUseProgram(program);
+
+    // initialize once will be ok
+    glUniform1i(sampler_location, 0);
+
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
 
@@ -406,19 +603,10 @@ bool simple_render::setup()
     return true;
 }
 
-void simple_render::begin_frame()
-{ 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    glViewport(0, 0, width, height);
-    glClearDepth(1.0);
-    glClearColor(0.3f, 0.3f, 0.5f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-}
-
-void simple_render::render_frame()
+void renderer_gl3_t::begin_frame()
 {
-	// TODO: move to end_frame etc.
+    renderer_opengl_t::begin_frame();
+
     draw_list.index_pointer = nullptr;
     draw_list.vertex_pointer = nullptr;
     draw_list.vertices.clear();
@@ -428,37 +616,20 @@ void simple_render::render_frame()
     uniforms.clear();
     uniform_buffer.clear();
     draw_commands.clear();
+}
 
-	static float f = 0.f;
+void renderer_gl3_t::draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count)
+{
+    draw_list.draw((vertex_t*)vertices, vertex_count, indices, index_count);
+}
 
-	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
+void renderer_gl3_t::uniform(const uniform_t& uniform)
+{
+    uniforms.push_back(uniform);
+}
 
-	for (int i = 0; i < num_frac; i++)
-	{
-		float sx = -1.f + 2.f / num_frac * i;
-		float ex = -1.f + 2.f / num_frac * (i + 1);
-		float tsx = 0.f + 1.f / num_frac * i;
-		float tex = 0.f + 1.f / num_frac * (i + 1);
-
-		float vertices[] = {
-			sx, -1.0, tsx, 0.0,
-			ex, -1.0, tex, 0.0,
-			sx, 1.0, tsx, 1.0,
-
-			sx, 1.0, tsx, 1.0,
-			ex, -1.0, tex, 0.0,
-			ex, 1.0, tex, 1.0,
-		};
-        uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
-        draw_list.draw((vertex_t*)vertices, 6, indices, 6);
-
-        uniform_t uniform;
-        memset(&uniform, 0, sizeof(uniform));
-        uniform.data[0].r = float(i + 1) / num_frac;
-
-        uniforms.push_back(uniform);
-	}
-
+void renderer_gl3_t::end_frame() 
+{
     GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
     const void *vertex_buffer_pointer = draw_list.vertices.data();
 
@@ -496,13 +667,12 @@ void simple_render::render_frame()
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferData(GL_UNIFORM_BUFFER, ubo_buffer_size, ubo_buffer_pointer, GL_DYNAMIC_DRAW);
 
+    draw_commands.resize(num_frac);
     for (int i = 0; i < num_frac; i++)
     {
-        draw_command_t command = {0, };
-        command.mesh.size = draw_list.commands[i].count;
-        command.mesh.offset = draw_list.commands[i].offset;
-        command.uniforms.push_back({ ubo, uniform_offsets[i].offset, uniform_offsets[i].size, block_index });
-        draw_commands.push_back(command);
+        draw_commands[i].mesh.size = draw_list.commands[i].count;
+        draw_commands[i].mesh.offset = draw_list.commands[i].offset;
+        draw_commands[i].uniform = { ubo, uniform_offsets[i].offset, uniform_offsets[i].size, block_index };
     }
 
     glUseProgram(program);
@@ -518,49 +688,35 @@ void simple_render::render_frame()
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 
-	for (int i = 0; i < num_frac; i++)
-		render_delta(i, c);
-
-    glDisableVertexAttribArray(position_attribute);
-    glDisableVertexAttribArray(texcoord_attribute);
-
-    draw_count = num_frac;
-}
-
-void simple_render::render_delta(int k, float c)
-{
-    const auto& call = draw_commands[k];
-
-    assert(call.uniforms.size() == 1);
-    for (auto ubo : call.uniforms)
-        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
-
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-
     const void* position = (size_t*)0;
     const void* texcoord = (size_t*)(2 * sizeof(float));
 
     glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
 
-    glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+
+    for (int i = 0; i < num_frac; i++) {
+        const auto& call = draw_commands[i];
+        const auto& ubo = call.uniform;
+        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
+
+        glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
+    }
+
+    glDisableVertexAttribArray(position_attribute);
+    glDisableVertexAttribArray(texcoord_attribute);
 }
 
-void simple_render::end_frame()
-{ 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void simple_render::render()
+void renderer_gl3_t::cleanup()
 {
-    begin_frame();
-    render_frame();
-    end_frame();
-}
+    renderer_opengl_t::cleanup();
 
-void simple_render::cleanup()
-{
+    glDeleteProgram(program);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+
     glBindVertexArray(0);
     glDeleteVertexArrays(1, &vao);
 
@@ -572,12 +728,6 @@ void simple_render::cleanup()
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
-
-    glDeleteTextures(1, &texture);
-
-    glDeleteProgram(program);
-    glDeleteShader(vertex_shader);
-    glDeleteShader(fragment_shader);
 }
 
 static void error_callback(int error, const char* description)
@@ -591,7 +741,7 @@ static void key_callback(GLFWwindow* window, int key, int scancode, int action, 
         glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
-void simple_render::render_profile_ui()
+void renderer_opengl_t::render_profile_ui()
 {
     ImGui::SetNextWindowPos(
         ImVec2(width - 200.f - 10.f, 10.f),
@@ -615,7 +765,7 @@ void simple_render::render_profile_ui()
     ImGui::End();
 }
 
-void simple_render::render_ui()
+void renderer_opengl_t::render_ui()
 {
     ImGui_ImplGlfwGL3_NewFrame();
     render_profile_ui();
@@ -683,6 +833,43 @@ void APIENTRY opengl_callback(GLenum source,
     trace(out.str().c_str());
 }
 
+void render_background_texture(renderer_opengl_t& render)
+{
+    render.begin_frame();
+
+	static float f = 0.f;
+
+	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
+
+	for (int i = 0; i < num_frac; i++)
+	{
+		float sx = -1.f + 2.f / num_frac * i;
+		float ex = -1.f + 2.f / num_frac * (i + 1);
+		float tsx = 0.f + 1.f / num_frac * i;
+		float tex = 0.f + 1.f / num_frac * (i + 1);
+
+		float vertices[] = {
+			sx, -1.0, tsx, 0.0,
+			ex, -1.0, tex, 0.0,
+			sx, 1.0, tsx, 1.0,
+
+			sx, 1.0, tsx, 1.0,
+			ex, -1.0, tex, 0.0,
+			ex, 1.0, tex, 1.0,
+		};
+
+        uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
+
+        uniform_t uniform;
+        memset(&uniform, 0, sizeof(uniform));
+        uniform.data[0].r = float(i + 1) / num_frac;
+
+        render.uniform(uniform);
+        render.draw((vertex_t*)vertices, 6, indices, 6);
+	}
+    render.end_frame();
+}
+
 int main(void)
 {
     glfwSetErrorCallback(error_callback);
@@ -690,11 +877,13 @@ int main(void)
     if (!glfwInit())
         exit(EXIT_FAILURE);
 
-    glfwWindowHint(GLFW_SAMPLES, samples);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_FALSE);
+    glfwWindowHint(GLFW_SAMPLES, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, major);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, minor);
+#if USE_CORE_PROFILE
+    glfwWindowHint(GLFW_OPENGL_PROFILE, profile);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, forward);
+#endif
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
@@ -727,7 +916,16 @@ int main(void)
 
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_alignment);
 
-    simple_render::setup();
+#if USE_CORE_PROFILE
+    auto render = renderer_gl3_t();
+#else
+    auto render = renderer_gl2_t();
+#endif
+
+    if (!render.setup()) {
+        glfwTerminate();
+        exit(EXIT_SUCCESS);
+    }
 
     // https://www.khronos.org/registry/OpenGL/extensions/ARB/ARB_timer_query.txt
 
@@ -750,7 +948,7 @@ int main(void)
 
         auto cpu_tick = std::chrono::high_resolution_clock::now();
 
-        simple_render::render();
+        render_background_texture(render);
 
         auto cpu_tock = std::chrono::high_resolution_clock::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
@@ -778,7 +976,7 @@ int main(void)
             draws_per_sec = draw_count / (gpu_time * 1e-3f);
         }
 
-        simple_render::render_ui();
+        render.render_ui();
         auto b = std::chrono::high_resolution_clock::now();
         auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a);
         auto d = static_cast<float>(c.count() * 1e-6);
@@ -793,7 +991,7 @@ int main(void)
             running = GLFW_FALSE;
     }
 
-    simple_render::cleanup();
+    render.cleanup();
 
 	ImGui_ImplGlfwGL3_Shutdown();
     glfwHideWindow(window);
