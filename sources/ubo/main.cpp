@@ -16,6 +16,7 @@
 #include <vector>
 #include <sstream>
 
+#define USE_TEST_CODE 1
 #define USE_CORE_PROFILE 1
 
 #if USE_CORE_PROFILE
@@ -741,6 +742,52 @@ void renderer_gl3_t::cleanup()
     glDeleteBuffers(1, &ubo);
 }
 
+class renderer_gl31_t : public renderer_gl3_t
+{
+public:
+    
+    void begin_frame() override;
+    void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
+    void uniform(const uniform_t& uniform) override;
+    void end_frame() override;
+};
+
+void renderer_gl31_t::begin_frame()
+{
+    renderer_opengl_t::begin_frame();
+    
+    glUseProgram(program);
+    
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
+    
+    const void* position = (size_t*)0;
+    const void* texcoord = (size_t*)(2 * sizeof(float));
+    
+    glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), position);
+    glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
+}
+
+void renderer_gl31_t::draw(vertex_t* vertices, int vertex_count, index_t*, int)
+{
+    auto vertex_buffer_size = vertex_count * sizeof(vertex_t);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertices, GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, vertex_count);
+}
+
+void renderer_gl31_t::uniform(const uniform_t& uniform)
+{
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(uniform_t), &uniform, GL_DYNAMIC_DRAW);
+}
+
+void renderer_gl31_t::end_frame()
+{
+    glDisableVertexAttribArray(position_attribute);
+    glDisableVertexAttribArray(texcoord_attribute);
+}
+
 static void error_callback(int error, const char* description)
 {
     trace("Error: %s\n", description);
@@ -924,7 +971,11 @@ int main(void)
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_alignment);
 
 #if USE_CORE_PROFILE
+#   if USE_TEST_CODE
+    auto render = renderer_gl31_t();
+#   else
     auto render = renderer_gl3_t();
+#   endif
 #else
     auto render = renderer_gl2_t();
 #endif
