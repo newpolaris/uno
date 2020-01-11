@@ -16,7 +16,17 @@
 #include <vector>
 #include <sstream>
 
-#define USE_CORE_PROFILE 0
+#define USE_CORE_PROFILE 1
+
+#if USE_CORE_PROFILE
+auto imgui_init = ImGui_ImplGlfwGL3_Init;
+auto imgui_shutdown = ImGui_ImplGlfwGL3_Shutdown;
+auto imgui_newframe = ImGui_ImplGlfwGL3_NewFrame;
+#else
+auto imgui_init = ImGui_ImplGlfwGL2_Init;
+auto imgui_shutdown = ImGui_ImplGlfwGL2_Shutdown;
+auto imgui_newframe = ImGui_ImplGlfwGL2_NewFrame;
+#endif
 
 namespace gl3 {
     
@@ -768,7 +778,7 @@ void renderer_opengl_t::render_profile_ui()
 
 void renderer_opengl_t::render_ui()
 {
-    ImGui_ImplGlfwGL2_NewFrame();
+    imgui_newframe();
     render_profile_ui();
     ImGui::Render();
     ImGui::EndFrame();
@@ -838,10 +848,6 @@ void render_background_texture(renderer_opengl_t& render)
 {
     render.begin_frame();
 
-	static float f = 0.f;
-
-	float c = std::cos(f += 0.11f)*0.5f + 0.5f;
-
 	for (int i = 0; i < num_frac; i++)
 	{
 		float sx = -1.f + 2.f / num_frac * i;
@@ -898,7 +904,7 @@ int main(void)
     glfwSwapInterval(0);
     glfwSetKeyCallback(window, key_callback);
 
-    ImGui_ImplGlfwGL2_Init(window, false);
+    imgui_init(window, false);
 
     glGetIntegerv(GL_SAMPLES, &samples);
     if (samples)
@@ -966,8 +972,9 @@ int main(void)
         glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
 
         if (stopTimerAvailable) {
-            GLuint64 result_time;
-            // glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
+            GLuint64 result_time = 0;
+            if (glGetQueryObjectui64v)
+                glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
             wait_gpu = false;
             query_issued = false;
             auto gpu_frame = static_cast<float>(result_time / 1e6f);
@@ -994,7 +1001,7 @@ int main(void)
 
     render.cleanup();
 
-	ImGui_ImplGlfwGL2_Shutdown();
+	imgui_shutdown();
     glfwHideWindow(window);
     glfwDestroyWindow(window);
 
