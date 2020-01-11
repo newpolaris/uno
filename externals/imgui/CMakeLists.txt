@@ -12,6 +12,8 @@ add_library(
         imgui_draw.cpp
         imgui_impl_glfw_gl3.cpp
         imgui_impl_glfw_gl3.h
+        imgui_impl_glfw.cpp
+        imgui_impl_glfw.h
         imgui_internal.h
         stb_rect_pack.h
         stb_textedit.h

@@ -2,6 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
 #include <imgui.h>
+#include <imgui_impl_glfw.h>
 #include <imgui_impl_glfw_gl3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -14,6 +15,8 @@
 #include <chrono>
 #include <vector>
 #include <sstream>
+
+#define USE_CORE_PROFILE 0
 
 namespace gl3 {
     
@@ -142,16 +145,14 @@ namespace {
 
     uint32_t draw_count = 0;
 
-#define USE_CORE_PROFILE 1
-
 #if USE_CORE_PROFILE
     int gl_version_major = 4;
     int gl_version_minor = 1;
     int profile = GLFW_OPENGL_CORE_PROFILE;
     int forward = GLFW_TRUE;
 #else
-    int major = 2;
-    int minor = 1;
+    int gl_version_major = 2;
+    int gl_version_minor = 1;
 #endif
 }
 
@@ -767,7 +768,7 @@ void renderer_opengl_t::render_profile_ui()
 
 void renderer_opengl_t::render_ui()
 {
-    ImGui_ImplGlfwGL3_NewFrame();
+    ImGui_ImplGlfwGL2_NewFrame();
     render_profile_ui();
     ImGui::Render();
     ImGui::EndFrame();
@@ -897,7 +898,7 @@ int main(void)
     glfwSwapInterval(0);
     glfwSetKeyCallback(window, key_callback);
 
-    ImGui_ImplGlfwGL3_Init(window, false);
+    ImGui_ImplGlfwGL2_Init(window, false);
 
     glGetIntegerv(GL_SAMPLES, &samples);
     if (samples)
@@ -966,7 +967,7 @@ int main(void)
 
         if (stopTimerAvailable) {
             GLuint64 result_time;
-            glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
+            // glGetQueryObjectui64v(query, GL_QUERY_RESULT, &result_time);
             wait_gpu = false;
             query_issued = false;
             auto gpu_frame = static_cast<float>(result_time / 1e6f);
@@ -993,7 +994,7 @@ int main(void)
 
     render.cleanup();
 
-	ImGui_ImplGlfwGL3_Shutdown();
+	ImGui_ImplGlfwGL2_Shutdown();
     glfwHideWindow(window);
     glfwDestroyWindow(window);
 
