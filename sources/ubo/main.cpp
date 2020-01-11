@@ -145,8 +145,8 @@ namespace {
 #define USE_CORE_PROFILE 1
 
 #if USE_CORE_PROFILE
-    int major = 4;
-    int minor = 1;
+    int gl_version_major = 4;
+    int gl_version_minor = 1;
     int profile = GLFW_OPENGL_CORE_PROFILE;
     int forward = GLFW_TRUE;
 #else
@@ -878,8 +878,8 @@ int main(void)
         exit(EXIT_FAILURE);
 
     glfwWindowHint(GLFW_SAMPLES, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, major);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, minor);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, gl_version_major);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, gl_version_minor);
 #if USE_CORE_PROFILE
     glfwWindowHint(GLFW_OPENGL_PROFILE, profile);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, forward);
