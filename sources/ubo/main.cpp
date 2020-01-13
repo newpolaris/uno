@@ -16,8 +16,8 @@
 #include <vector>
 #include <sstream>
 
-#define USE_TEST_CODE 1
 #define USE_CORE_PROFILE 1
+#define USE_TEST_CODE 1
 
 #if USE_CORE_PROFILE
 auto imgui_init = ImGui_ImplGlfwGL3_Init;
@@ -143,7 +143,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 1000;
+    int num_frac = 2;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -742,6 +742,7 @@ void renderer_gl3_t::cleanup()
     glDeleteBuffers(1, &ubo);
 }
 
+// buffer update per drawcall
 class renderer_gl31_t : public renderer_gl3_t
 {
 public:
@@ -770,9 +771,13 @@ void renderer_gl31_t::begin_frame()
 
 void renderer_gl31_t::draw(vertex_t* vertices, int vertex_count, index_t*, int)
 {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
     auto vertex_buffer_size = vertex_count * sizeof(vertex_t);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertices, GL_STREAM_DRAW);
+
     glDrawArrays(GL_TRIANGLES, 0, vertex_count);
 }
 
@@ -780,6 +785,8 @@ void renderer_gl31_t::uniform(const uniform_t& uniform)
 {
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(uniform_t), &uniform, GL_DYNAMIC_DRAW);
+
+    glBindBufferBase(GL_UNIFORM_BUFFER, block_index, ubo);
 }
 
 void renderer_gl31_t::end_frame()
