@@ -16,6 +16,8 @@
 #include <vector>
 #include <sstream>
 
+#include "handle_alloc.h"
+
 #define USE_CORE_PROFILE 1
 #define USE_TEST_CODE 1
 
@@ -143,7 +145,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 2;
+    int num_frac = 4;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -263,6 +265,20 @@ void draw_list_t::draw(const vertex_t* vertex, int32_t vertex_count, const index
     commands.push_back({index_count, (int32_t)index_offset});
 }
 
+struct texture_handle_t
+{
+    handle_t index;
+};
+
+texture_handle_t handle = { 0 };
+
+struct texture_desc_t
+{
+    int32_t width;
+    int32_t height;
+    uint8_t* data;
+};
+
 struct renderer_opengl_t
 {
 public:
@@ -272,6 +288,7 @@ public:
     virtual void end_frame();
     virtual void uniform(const uniform_t& uniform) = 0;
     virtual void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) = 0;
+    virtual void texture(texture_handle_t texture) = 0;
 
     virtual void render_ui();
     virtual void render_profile_ui();
@@ -279,9 +296,16 @@ public:
 
     virtual GLuint create_shader(GLenum type, const char* shaderCode);
     virtual GLuint create_program(GLuint vertex, GLuint fragment);
-    virtual GLuint create_texture(std::string path);
 
-    GLuint texture;
+    GLuint create_texture_impl(int32_t width, int32_t height, uint8_t* data);
+    GLuint create_texture_impl(std::string path);
+
+    virtual texture_handle_t create_texture(const texture_desc_t& desc);
+    virtual void destroy_texture(texture_handle_t handle);
+
+    static const uint8_t max_texture = 128;
+    handle_alloc_t<max_texture> handle_alloc;
+    GLuint textures[max_texture];
 };
 
 GLuint renderer_opengl_t::create_shader(GLenum type, const char* shaderCode)
@@ -341,7 +365,25 @@ GLuint renderer_opengl_t::create_program(GLuint vertex, GLuint fragment)
     return id;
 }
 
-GLuint renderer_opengl_t::create_texture(std::string path)
+GLuint renderer_opengl_t::create_texture_impl(int32_t width, int32_t height, uint8_t* data)
+{
+    GLenum format = GL_RGBA;
+    GLenum internalFormat = GL_RGBA;
+
+    GLuint instance = 0;
+    glGenTextures(1, &instance);
+    glBindTexture(GL_TEXTURE_2D, instance);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_FLOAT, data);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return instance;
+}
+
+GLuint renderer_opengl_t::create_texture_impl(std::string path)
 {
     stbi_set_flip_vertically_on_load(true);
 
@@ -382,30 +424,28 @@ GLuint renderer_opengl_t::create_texture(std::string path)
     return instance;
 }
 
+texture_handle_t renderer_opengl_t::create_texture(const texture_desc_t& desc)
+{
+    texture_handle_t handle = { handle_alloc.alloc() };
+    textures[handle.index] = create_texture_impl(desc.width, desc.height, desc.data);
+    return handle;
+}
+
+void renderer_opengl_t::destroy_texture(texture_handle_t handle)
+{
+    if (handle.index == invalid_handle_t )
+        return;
+
+    GLuint& texture = textures[handle.index];
+    glDeleteTextures(1, &texture);
+    texture = 0;
+
+    handle_alloc.free(handle.index);
+}
+
 bool renderer_opengl_t::setup()
 {
-    GLenum format = GL_RGBA;
-    GLenum internalFormat = GL_RGBA;
-
-    glm::vec4 texel[4] = { 
-        { 1.0, 0.0, 0.0, 1.0 },
-        { 0.0, 1.0, 0.0, 1.0 },
-        { 0.0, 0.0, 1.0, 1.0 },
-        { 1.0, 1.0, 0.0, 1.0 },
-    };
-
-    GLuint instance = 0;
-    glGenTextures(1, &instance);
-    glBindTexture(GL_TEXTURE_2D, instance);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 2, 2, 0, format, GL_FLOAT, texel);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    texture = instance;
-
+    memset(textures, 0, sizeof(textures));
     return true;
 }
 
@@ -428,7 +468,6 @@ void renderer_opengl_t::end_frame()
 
 void renderer_opengl_t::cleanup()
 {
-    glDeleteTextures(1, &texture);
 }
 
 class renderer_gl2_t : public renderer_opengl_t
@@ -439,6 +478,7 @@ public:
     void begin_frame() override;
     void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
     void uniform(const uniform_t& uniform) override;
+    void texture(texture_handle_t texture) override;
     void end_frame() override;
     void cleanup() override;
 
@@ -495,9 +535,6 @@ void renderer_gl2_t::begin_frame()
 
     glUseProgram(program);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
 }
@@ -519,6 +556,12 @@ void renderer_gl2_t::uniform(const uniform_t& uniform)
     glUniform4fv(uniform_location[1], 1, (const float*)&uniform.data[1]);
     glUniform4fv(uniform_location[2], 1, (const float*)&uniform.data[2]);
     glUniform4fv(uniform_location[3], 1, (const float*)&uniform.data[3]);
+}
+
+void renderer_gl2_t::texture(texture_handle_t texture)
+{
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
 }
 
 void renderer_gl2_t::end_frame() 
@@ -546,6 +589,7 @@ public:
     void begin_frame() override;
     void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
     void uniform(const uniform_t& uniform) override;
+    void texture(texture_handle_t texture) override;
     void end_frame() override;
     void cleanup() override;
 
@@ -640,6 +684,10 @@ void renderer_gl3_t::uniform(const uniform_t& uniform)
     uniforms.push_back(uniform);
 }
 
+void renderer_gl3_t::texture(texture_handle_t texture)
+{
+}
+
 void renderer_gl3_t::end_frame() 
 {
     GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
@@ -694,8 +742,8 @@ void renderer_gl3_t::end_frame()
     // const GLuint block_point = 0;
     // glUniformBlockBinding(program, block_index, block_point);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
+    // glActiveTexture(GL_TEXTURE0);
+    // glBindTexture(GL_TEXTURE_2D, texture);
 
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
@@ -750,6 +798,7 @@ public:
     void begin_frame() override;
     void draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count) override;
     void uniform(const uniform_t& uniform) override;
+    void texture(texture_handle_t texture) override;
     void end_frame() override;
 };
 
@@ -771,9 +820,6 @@ void renderer_gl31_t::begin_frame()
 
 void renderer_gl31_t::draw(vertex_t* vertices, int vertex_count, index_t*, int)
 {
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
     auto vertex_buffer_size = vertex_count * sizeof(vertex_t);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertices, GL_STREAM_DRAW);
@@ -787,6 +833,12 @@ void renderer_gl31_t::uniform(const uniform_t& uniform)
     glBufferData(GL_UNIFORM_BUFFER, sizeof(uniform_t), &uniform, GL_DYNAMIC_DRAW);
 
     glBindBufferBase(GL_UNIFORM_BUFFER, block_index, ubo);
+}
+
+void renderer_gl31_t::texture(texture_handle_t texture)
+{
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
 }
 
 void renderer_gl31_t::end_frame()
@@ -826,7 +878,7 @@ void renderer_opengl_t::render_profile_ui()
     ImGui::Text("FPS: %f\n", 1.f/per_frame_sec);
     ImGui::Separator();
     ImGui::Unindent();
-    ImGui::SliderInt("", &num_frac, 1000, 10000);
+    ImGui::SliderInt("", &num_frac, 10, 10000);
     ImGui::End();
 }
 
@@ -902,6 +954,10 @@ void render_background_texture(renderer_opengl_t& render)
 {
     render.begin_frame();
 
+    static texture_handle_t texture = { invalid_handle_t };
+
+    int texture_index = -1;
+
 	for (int i = 0; i < num_frac; i++)
 	{
 		float sx = -1.f + 2.f / num_frac * i;
@@ -921,11 +977,27 @@ void render_background_texture(renderer_opengl_t& render)
 
         uint32_t indices[] = { 0, 1, 2, 3, 4, 5 };
 
-        uniform_t uniform;
-        memset(&uniform, 0, sizeof(uniform));
-        uniform.data[0].r = float(i + 1) / num_frac;
+        uniform_t data;
+        memset(&data, 0, sizeof(data));
+        data.data[0].r = float(i + 1) / num_frac;
 
-        render.uniform(uniform);
+        int index = i * 4 / num_frac;
+        if (index != texture_index) 
+        {
+            render.destroy_texture(texture);
+
+            float f = float(i+1) / 4;
+            glm::vec4 texel[4] = {
+                {  f, 0.0,  0.0, 1.0 },
+                { 0.0,  f,  0.0, 1.0 },
+                { 0.0, 0.0,   f, 1.0 },
+                {   f, 1.0, 0.0, 1.0 },
+            };
+            texture = render.create_texture({ 2, 2, (uint8_t*)texel});
+        }
+
+        render.uniform(data);
+        render.texture(texture);
         render.draw((vertex_t*)vertices, 6, indices, 6);
 	}
     render.end_frame();
