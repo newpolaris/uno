@@ -18,7 +18,7 @@
 
 #include "handle_alloc.h"
 
-#define USE_CORE_PROFILE 1
+#define USE_CORE_PROFILE 0
 #define USE_TEST_CODE 0
 
 #if USE_CORE_PROFILE
@@ -145,7 +145,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 4;
+    int num_frac = 10;
 
     GLint samples = 4;
     GLint uniform_alignment = 0;
@@ -208,6 +208,40 @@ struct uniform_block_t
         uint8_t _[256];
     };
 };
+
+#define GL_TEXTURE_EXTERNAL_OES 0x00008d65
+
+constexpr size_t get_index_for_texture_target(GLuint target) noexcept
+{
+    switch (target)
+    {
+    case GL_TEXTURE_2D:             return 0;
+    case GL_TEXTURE_2D_ARRAY:       return 1;
+    case GL_TEXTURE_CUBE_MAP:       return 2;
+    case GL_TEXTURE_2D_MULTISAMPLE: return 3;
+    case GL_TEXTURE_EXTERNAL_OES:   return 4;
+    default:                        return 0;
+    }
+}
+
+struct texture_state_t {
+    GLuint activate = 0;
+    struct {
+        struct {
+            GLuint instance = 0;
+        } target[5];
+    } unit[8];
+};
+
+template <typename T, typename F>
+inline void update_state(T& state, const T& expected, F functor, bool force = false) noexcept
+{
+    if (force || state != expected)
+    {
+        state = expected;
+        functor();
+    }
+}
 
 struct draw_list_t 
 {
@@ -293,6 +327,9 @@ public:
     virtual void render_profile_ui();
     virtual void cleanup();
 
+    inline void activate_texture(GLuint unit);
+    inline void bind_texture(GLuint unit, GLuint target, GLuint instance);
+
     virtual GLuint create_shader(GLenum type, const char* shaderCode);
     virtual GLuint create_program(GLuint vertex, GLuint fragment);
 
@@ -305,7 +342,25 @@ public:
     static const uint8_t max_texture = 128;
     handle_alloc_t<max_texture> handle_alloc;
     GLuint textures[max_texture];
+
+    texture_state_t texture_state;
 };
+
+void renderer_opengl_t::activate_texture(GLuint unit)
+{
+    update_state(texture_state.activate, unit, [&]() {
+        glActiveTexture(GL_TEXTURE0 + unit);
+    });
+}
+
+void renderer_opengl_t::bind_texture(GLuint unit, GLuint target, GLuint instance)
+{
+    uint8_t target_index = (uint8_t)get_index_for_texture_target(target);
+    update_state(texture_state.unit[unit].target[target_index].instance, instance, [&](){
+        activate_texture(unit);
+        glBindTexture(target, instance);
+    });
+}
 
 GLuint renderer_opengl_t::create_shader(GLenum type, const char* shaderCode)
 {
@@ -559,8 +614,9 @@ void renderer_gl2_t::uniform(const uniform_t& uniform)
 
 void renderer_gl2_t::texture(texture_handle_t texture)
 {
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
+    bind_texture(0, GL_TEXTURE_2D, textures[texture.index]);
+    // glActiveTexture(GL_TEXTURE0);
+    // glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
 }
 
 void renderer_gl2_t::end_frame() 
