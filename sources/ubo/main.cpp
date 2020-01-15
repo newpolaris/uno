@@ -193,6 +193,7 @@ struct draw_command_t
 
     mesh_t mesh;
     uniform_t uniform;
+    GLuint texture;
 };
 
 struct uniform_t
@@ -269,8 +270,6 @@ struct texture_handle_t
 {
     handle_t index;
 };
-
-texture_handle_t handle = { 0 };
 
 struct texture_desc_t
 {
@@ -593,6 +592,9 @@ public:
     void end_frame() override;
     void cleanup() override;
 
+    texture_handle_t create_texture(const texture_desc_t& desc) override;
+    void destroy_texture(texture_handle_t handle) override;
+
     GLint position_attribute;
     GLint texcoord_attribute;
     GLint sampler_location;
@@ -608,6 +610,8 @@ public:
     GLint block_index;
     draw_list_t draw_list;
 
+    std::vector<texture_handle_t> free_textures;
+    std::vector<texture_handle_t> bind_textures;
     std::vector<uniform_t> uniforms;
     std::vector<char> uniform_buffer;
 
@@ -672,6 +676,7 @@ void renderer_gl3_t::begin_frame()
     uniforms.clear();
     uniform_buffer.clear();
     draw_commands.clear();
+    bind_textures.clear();
 }
 
 void renderer_gl3_t::draw(vertex_t* vertices, int vertex_count, index_t* indices, int index_count)
@@ -686,8 +691,7 @@ void renderer_gl3_t::uniform(const uniform_t& uniform)
 
 void renderer_gl3_t::texture(texture_handle_t texture)
 {
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
+    bind_textures.push_back(texture);
 }
 
 void renderer_gl3_t::end_frame() 
@@ -735,6 +739,7 @@ void renderer_gl3_t::end_frame()
         draw_commands[i].mesh.size = draw_list.commands[i].count;
         draw_commands[i].mesh.offset = draw_list.commands[i].offset;
         draw_commands[i].uniform = { ubo, uniform_offsets[i].offset, uniform_offsets[i].size, block_index };
+        draw_commands[i].texture = textures[bind_textures[i].index];
     }
 
     glUseProgram(program);
@@ -743,9 +748,6 @@ void renderer_gl3_t::end_frame()
     // without below line, bind block_point according to shader code's define
     // const GLuint block_point = 0;
     // glUniformBlockBinding(program, block_index, block_point);
-
-    // glActiveTexture(GL_TEXTURE0);
-    // glBindTexture(GL_TEXTURE_2D, texture);
 
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
@@ -764,16 +766,34 @@ void renderer_gl3_t::end_frame()
         const auto& ubo = call.uniform;
         glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
 
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, call.texture);
+
         glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
     }
 
     glDisableVertexAttribArray(position_attribute);
     glDisableVertexAttribArray(texcoord_attribute);
+
+    for (auto handle : free_textures) {
+        GLuint& texture = textures[handle.index];
+        glDeleteTextures(1, &texture);
+        texture = 0;
+        handle_alloc.free(handle.index);
+    }
+    free_textures.clear();
 }
 
 void renderer_gl3_t::cleanup()
 {
     renderer_opengl_t::cleanup();
+
+    for (auto handle : free_textures) {
+        GLuint& texture = textures[handle.index];
+        glDeleteTextures(1, &texture);
+        texture = 0;
+    }
+    free_textures.clear();
 
     glDeleteProgram(program);
     glDeleteShader(vertex_shader);
@@ -790,6 +810,20 @@ void renderer_gl3_t::cleanup()
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     glDeleteBuffers(1, &ubo);
+}
+
+texture_handle_t renderer_gl3_t::create_texture(const texture_desc_t& desc)
+{
+    texture_handle_t handle = { handle_alloc.alloc() };
+    textures[handle.index] = create_texture_impl(desc.width, desc.height, desc.data);
+    return handle;
+}
+
+void renderer_gl3_t::destroy_texture(texture_handle_t handle)
+{
+    if (handle.index == invalid_handle_t)
+        return;
+    free_textures.push_back(handle);
 }
 
 // buffer update per drawcall
@@ -990,12 +1024,14 @@ void render_background_texture(renderer_opengl_t& render)
 
             float f = float(index+1) / 4;
             glm::vec4 texel[4] = {
-                {  f, 0.0,  0.0, 1.0 },
-                { 0.0,  f,  0.0, 1.0 },
-                { 0.0, 0.0,   f, 1.0 },
-                {   f, 1.0, 0.0, 1.0 },
+                {   f, 0.0,  0.0, 1.0 },
+                { 0.0,   f,  0.0, 1.0 },
+                { 0.0, 0.0,    f, 1.0 },
+                {   f, 1.0,  0.0, 1.0 },
             };
             texture = render.create_texture({ 2, 2, (uint8_t*)texel});
+
+            texture_index = index;
         }
 
         render.uniform(data);
