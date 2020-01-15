@@ -18,7 +18,7 @@
 
 #include "handle_alloc.h"
 
-#define USE_CORE_PROFILE 0
+#define USE_CORE_PROFILE 1
 #define USE_TEST_CODE 0
 
 #if USE_CORE_PROFILE
@@ -614,9 +614,8 @@ void renderer_gl2_t::uniform(const uniform_t& uniform)
 
 void renderer_gl2_t::texture(texture_handle_t texture)
 {
-    bind_texture(0, GL_TEXTURE_2D, textures[texture.index]);
-    // glActiveTexture(GL_TEXTURE0);
-    // glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
 }
 
 void renderer_gl2_t::end_frame() 
@@ -822,6 +821,7 @@ void renderer_gl3_t::end_frame()
         const auto& ubo = call.uniform;
         glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
 
+		// bind_texture(0, GL_TEXTURE_2D, call.texture);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, call.texture);
 
