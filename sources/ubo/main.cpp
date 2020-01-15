@@ -19,7 +19,7 @@
 #include "handle_alloc.h"
 
 #define USE_CORE_PROFILE 1
-#define USE_TEST_CODE 1
+#define USE_TEST_CODE 0
 
 #if USE_CORE_PROFILE
 auto imgui_init = ImGui_ImplGlfwGL3_Init;
@@ -61,7 +61,7 @@ out vec4 color_out;
 
 void main()
 {
-    color_out = texture(u_sampler, v_texcoord) * vec4(u_frag.data[0].rrr, 1.0);
+    color_out = texture(u_sampler, v_texcoord) * vec4(1.0 + 0.05*u_frag.data[0].rrr, 1.0);
 }
 )__";
 }
@@ -96,7 +96,7 @@ varying vec2 v_texcoord;
 
 void main()
 {
-    gl_FragColor = texture2D(u_sampler, v_texcoord) * vec4(u_frag.data[0].rrr, 1.0);
+    gl_FragColor = texture2D(u_sampler, v_texcoord) * vec4(1.0 + 0.05*u_frag.data[0].rrr, 1.0);
 }
 )__";
 }
@@ -686,6 +686,8 @@ void renderer_gl3_t::uniform(const uniform_t& uniform)
 
 void renderer_gl3_t::texture(texture_handle_t texture)
 {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures[texture.index]);
 }
 
 void renderer_gl3_t::end_frame() 
@@ -986,7 +988,7 @@ void render_background_texture(renderer_opengl_t& render)
         {
             render.destroy_texture(texture);
 
-            float f = float(i+1) / 4;
+            float f = float(index+1) / 4;
             glm::vec4 texel[4] = {
                 {  f, 0.0,  0.0, 1.0 },
                 { 0.0,  f,  0.0, 1.0 },
