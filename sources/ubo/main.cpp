@@ -610,7 +610,7 @@ bool renderer_gl2_t::setup()
     assert(sampler_location >= 0);
     assert(uniform_location[0] >= 0);
 
-    glUseProgram(program);
+    use_program(program);
 
     // initialize once will be ok
     glUniform1i(sampler_location, 0);
@@ -622,7 +622,7 @@ void renderer_gl2_t::begin_frame()
 {
     renderer_opengl_t::begin_frame();
 
-    glUseProgram(program);
+    use_program(program);
 
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
@@ -742,7 +742,7 @@ bool renderer_gl3_t::setup()
     assert(sampler_location >= 0);
     assert(block_index >= 0);
 
-    glUseProgram(program);
+    use_program(program);
 
     // initialize once will be ok
     glUniform1i(sampler_location, 0);
@@ -847,7 +847,7 @@ void renderer_gl3_t::end_frame()
         draw_commands[i].texture = textures[bind_textures[i].index];
     }
 
-    glUseProgram(program);
+    use_program(program);
 
     // since 3.0
     // without below line, bind block_point according to shader code's define
@@ -871,9 +871,7 @@ void renderer_gl3_t::end_frame()
         const auto& ubo = call.uniform;
         glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
 
-		// bind_texture(0, GL_TEXTURE_2D, call.texture);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, call.texture);
+        bind_texture(0, GL_TEXTURE_2D, call.texture);
 
         glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
     }
@@ -950,7 +948,7 @@ void renderer_gl31_t::begin_frame()
 {
     renderer_opengl_t::begin_frame();
     
-    glUseProgram(program);
+    use_program(program);
     
     glEnableVertexAttribArray(position_attribute);
     glEnableVertexAttribArray(texcoord_attribute);
