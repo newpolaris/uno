@@ -1,3 +1,5 @@
+#if 0
+
 #include "gtest/gtest.h"
 
 TEST(handle_alloc_t, test_alloc) {
@@ -45,3 +47,5 @@ TEST(handle_alloc_t, test_sequential) {
         allocator.free(i);
     EXPECT_EQ(254, allocator.alloc());
 }
+
+#endif
