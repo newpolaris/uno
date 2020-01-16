@@ -34,45 +34,33 @@ auto imgui_newframe = ImGui_ImplGlfwGL2_NewFrame;
 namespace gl3 {
     
     const char* vertex_shader_code = R"__(
-#version 460 core
+#version 330 core
 
 layout(location = 0) in vec2 a_position;
 layout(location = 1) in vec2 a_texcoord;
-layout(location = 2) in uint drawid;
-
 out vec2 v_texcoord;
-flat out uint drawID;
 
 void main()
 {
     v_texcoord = a_texcoord;
     gl_Position = vec4(a_position, 0, 1);
-    drawID = drawid;
 }
 )__";
 
     const char* fragment_shader_code = R"__(
-#version 460 core
+#version 330 core
 
-flat in uint drawID;
 uniform sampler2D u_sampler;
-
-struct frag_data
+layout(std140) uniform u_fragment
 {
     vec4 data[4];
-};
-
-layout(std430) buffer u_fragments
-{
-    frag_data data_SSBO[];
-};
+} u_frag;
 
 in vec2 v_texcoord;
 out vec4 color_out;
 
 void main()
 {
-    frag_data u_frag = data_SSBO[drawID];
     color_out = texture(u_sampler, v_texcoord) * vec4(1.0 + 0.05*u_frag.data[0].rrr, 1.0);
 }
 )__";
@@ -157,7 +145,7 @@ void debug_output(const char* message)
 }
 
 namespace {
-    int num_frac = 1;
+    int num_frac = 10;
     const int max_frac = 10000;
 
     GLint samples = 4;
@@ -173,7 +161,7 @@ namespace {
 
 #if USE_CORE_PROFILE
     int gl_version_major = 4;
-    int gl_version_minor = 6;
+    int gl_version_minor = 1;
     int profile = GLFW_OPENGL_CORE_PROFILE;
     int forward = GLFW_TRUE;
 #else
@@ -752,7 +740,7 @@ bool renderer_gl3_t::setup()
     assert(position_attribute >= 0);
     assert(texcoord_attribute >= 0);
     assert(sampler_location >= 0);
-    // assert(block_index >= 0);
+    assert(block_index >= 0);
 
     glUseProgram(program);
 
@@ -769,12 +757,6 @@ bool renderer_gl3_t::setup()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 
     glGenBuffers(1, &ubo);
-
-    glGenBuffers(1, &ssbo);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, 10000*sizeof(uniform_t), 0, GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     return true;
 }
@@ -819,20 +801,6 @@ void renderer_gl3_t::use_program(GLuint instance)
 
 void renderer_gl3_t::end_frame() 
 {
-    GLuint vDrawId[100];
-    for (GLuint i(0); i < 100; i++)
-    {
-        vDrawId[i] = i;
-    }
-
-    glGenBuffers(1, &gDrawIdBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, gDrawIdBuffer);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vDrawId), vDrawId, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(2);
-    glVertexAttribIPointer(2, 1, GL_UNSIGNED_INT, 0, (GLvoid*)0);
-    glVertexAttribDivisor(2, 1);
-
     GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
     const void *vertex_buffer_pointer = draw_list.vertices.data();
 
@@ -852,7 +820,7 @@ void renderer_gl3_t::end_frame()
     };
     std::vector<uniform_offset_t> uniform_offsets(uniforms.size());
 
-    const int block_size = sizeof(uniform_t);
+    const int block_size = sizeof(uniform_block_t);
     uniform_buffer.resize(block_size * uniforms.size());
 
     char* data = uniform_buffer.data();
@@ -864,16 +832,11 @@ void renderer_gl3_t::end_frame()
         uniform_offsets[i] = uniform_offset_t({ i * block_size, block_size });
     }
 
-    GLsizeiptr buffer_size = uniform_buffer.size();
-    const void *buffer_pointer = uniform_buffer.data();
+    GLsizeiptr ubo_buffer_size = uniform_buffer.size();
+    const void *ubo_buffer_pointer = uniform_buffer.data();
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
-    GLvoid* p = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, buffer_size, GL_MAP_WRITE_BIT  | GL_MAP_INVALIDATE_RANGE_BIT );
-    memcpy(p, buffer_pointer, buffer_size);
-    glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
-
-    // glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-    // glBufferData(GL_UNIFORM_BUFFER, ubo_buffer_size, ubo_buffer_pointer, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, ubo_buffer_size, ubo_buffer_pointer, GL_DYNAMIC_DRAW);
 
     draw_commands.resize(num_frac);
     for (int i = 0; i < num_frac; i++)
@@ -901,43 +864,26 @@ void renderer_gl3_t::end_frame()
     glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), texcoord);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-
-    GLint last_texture; glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-    bind_texture(0, GL_TEXTURE_2D, draw_commands[0].texture);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-
-        // glActiveTexture(GL_TEXTURE0);
-        // glBindTexture(GL_TEXTURE_2D, draw_commands[0].texture);
-
-    for (int i = 0; i < num_frac; i++) {
-        const auto& call = draw_commands[i];
-        first[i] = call.mesh.offset;
-        count[i] = call.mesh.size;
-    }
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 
     for (int i = 0; i < num_frac; i++) {
         const auto& call = draw_commands[i];
         const auto& ubo = call.uniform;
-        // glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
+        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
 
 		// bind_texture(0, GL_TEXTURE_2D, call.texture);
-        // glActiveTexture(GL_TEXTURE0);
-        // glBindTexture(GL_TEXTURE_2D, call.texture);
-        // glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, call.texture);
+
+        glDrawElements(GL_TRIANGLES, call.mesh.size, GL_UNSIGNED_INT, (const void*)(call.mesh.offset * sizeof(4)));
     }
-    glMultiDrawArrays(GL_TRIANGLES, first, count, num_frac);
 
     glDisableVertexAttribArray(position_attribute);
     glDisableVertexAttribArray(texcoord_attribute);
 
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-
     for (auto handle : free_textures)
         destroy_texture(handle);
     free_textures.clear();
-
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
 }
 
 void renderer_gl3_t::cleanup()
@@ -1214,8 +1160,8 @@ int main(void)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, gl_version_major);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, gl_version_minor);
 #if USE_CORE_PROFILE
-    // glfwWindowHint(GLFW_OPENGL_PROFILE, profile);
-    // glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, forward);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, profile);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, forward);
 #endif
 
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
