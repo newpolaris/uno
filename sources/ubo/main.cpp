@@ -15,6 +15,7 @@
 #include <chrono>
 #include <vector>
 #include <sstream>
+#include <algorithm>
 #include <functional>
 
 #include "handle_alloc.h"
@@ -182,14 +183,6 @@ struct draw_command_t
 struct uniform_t
 {
     glm::vec4 data[4];
-};
-
-struct uniform_block_t
-{
-    union {
-        glm::vec4 data[4];
-        uint8_t _[256];
-    };
 };
 
 #define GL_TEXTURE_EXTERNAL_OES 0x00008d65
@@ -686,13 +679,10 @@ public:
     GLuint vbo;
     GLuint ibo;
     GLuint ubo;
-    GLuint ssbo;
-    GLuint gDrawIdBuffer;
     GLint block_index;
     draw_list_t draw_list;
 
-    GLint first[max_frac];
-    GLsizei count[max_frac];
+    GLint uniform_location[4];
 
     std::vector<texture_handle_t> free_textures;
     std::vector<texture_handle_t> bind_textures;
@@ -722,6 +712,11 @@ bool renderer_gl3_t::setup()
     texcoord_attribute = glGetAttribLocation(program, "a_texcoord");
     sampler_location = glGetUniformLocation(program, "u_sampler");
     block_index = glGetUniformBlockIndex(program, "u_fragment");
+
+    uniform_location[0] = glGetUniformLocation(program, "u_frag.data[0]");
+    uniform_location[1] = glGetUniformLocation(program, "u_frag.data[1]");
+    uniform_location[2] = glGetUniformLocation(program, "u_frag.data[2]");
+    uniform_location[3] = glGetUniformLocation(program, "u_frag.data[3]");
 
     assert(position_attribute >= 0);
     assert(texcoord_attribute >= 0);
@@ -785,6 +780,17 @@ void renderer_gl3_t::use_program(GLuint instance)
     });
 }
 
+template <typename T>
+inline T alignup(T num, size_t align)
+{
+    return (T)(((size_t)num + align - 1) & ~(align - 1));
+}
+
+struct uniform_manager_t
+{
+    GLuint ubo;
+};
+
 void renderer_gl3_t::end_frame() 
 {
     GLsizeiptr vertex_buffer_size = sizeof(vertex_t) * draw_list.vertices.size();
@@ -799,23 +805,28 @@ void renderer_gl3_t::end_frame()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_buffer_size, index_buffer_pointer, GL_STREAM_DRAW);
 
+    GLint uniform_buffer_offset_alignment;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_buffer_offset_alignment);
+    uniform_buffer_offset_alignment = std::max(1, uniform_buffer_offset_alignment);
+
+    int32_t block_size = alignup(sizeof(uniforms), uniform_buffer_offset_alignment);
+
+#if 0
+    uniform_buffer.resize(block_size * uniforms.size(), 0);
+
+    char* data = uniform_buffer.data();
+
     struct uniform_offset_t
     {
         int32_t offset;
         uint32_t size;
     };
     std::vector<uniform_offset_t> uniform_offsets(uniforms.size());
-
-    const int block_size = sizeof(uniform_block_t);
-    uniform_buffer.resize(block_size * uniforms.size());
-
-    char* data = uniform_buffer.data();
-
     for (int32_t i = 0; i < (int32_t)(uniforms.size()); i++) 
     {
         memcpy(data, &uniforms[i], sizeof(uniform_t));
         data += block_size;
-        uniform_offsets[i] = uniform_offset_t({ i * block_size, block_size });
+        uniform_offsets[i] = uniform_offset_t({ i * block_size, (uint32_t)block_size });
     }
 
     GLsizeiptr ubo_buffer_size = uniform_buffer.size();
@@ -823,13 +834,14 @@ void renderer_gl3_t::end_frame()
 
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferData(GL_UNIFORM_BUFFER, ubo_buffer_size, ubo_buffer_pointer, GL_DYNAMIC_DRAW);
+#endif
 
     draw_commands.resize(num_frac);
     for (int i = 0; i < num_frac; i++)
     {
         draw_commands[i].mesh.size = draw_list.commands[i].count;
         draw_commands[i].mesh.offset = draw_list.commands[i].offset;
-        draw_commands[i].uniform = { ubo, uniform_offsets[i].offset, uniform_offsets[i].size, block_index };
+        // draw_commands[i].uniform = { ubo, uniform_offsets[i].offset, uniform_offsets[i].size, block_index };
         draw_commands[i].texture = textures[bind_textures[i].index];
     }
 
@@ -855,7 +867,12 @@ void renderer_gl3_t::end_frame()
     for (int i = 0; i < num_frac; i++) {
         const auto& call = draw_commands[i];
         const auto& ubo = call.uniform;
-        glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
+        const auto& uniform = uniforms[i];
+        // glBindBufferRange(GL_UNIFORM_BUFFER, ubo.slot, ubo.id, ubo.offset, ubo.size);
+        glUniform4fv(uniform_location[0], 1, (const float*)&uniform.data[0]);
+        glUniform4fv(uniform_location[1], 1, (const float*)&uniform.data[1]);
+        glUniform4fv(uniform_location[2], 1, (const float*)&uniform.data[2]);
+        glUniform4fv(uniform_location[3], 1, (const float*)&uniform.data[3]);
 
         bind_texture(0, GL_TEXTURE_2D, call.texture);
 
@@ -1150,7 +1167,7 @@ auto imgui_newframe = ImGui_ImplGlfwGL2_NewFrame;
     int profile = GLFW_OPENGL_CORE_PROFILE;
     int forward = GLFW_TRUE;
 #   if USE_GLES
-    gl_version_major = 3;
+    gl_version_major = 2;
     gl_version_minor = 0;
 #   endif
 #else
