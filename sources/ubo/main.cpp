@@ -15,21 +15,13 @@
 #include <chrono>
 #include <vector>
 #include <sstream>
+#include <functional>
 
 #include "handle_alloc.h"
 
-#define USE_CORE_PROFILE 1
+#define USE_CORE_PROFILE 0
+#define USE_GLES 0
 #define USE_TEST_CODE 0
-
-#if USE_CORE_PROFILE
-auto imgui_init = ImGui_ImplGlfwGL3_Init;
-auto imgui_shutdown = ImGui_ImplGlfwGL3_Shutdown;
-auto imgui_newframe = ImGui_ImplGlfwGL3_NewFrame;
-#else
-auto imgui_init = ImGui_ImplGlfwGL2_Init;
-auto imgui_shutdown = ImGui_ImplGlfwGL2_Shutdown;
-auto imgui_newframe = ImGui_ImplGlfwGL2_NewFrame;
-#endif
 
 namespace gl3 {
     
@@ -158,16 +150,6 @@ namespace {
     float per_frame_sec = 0.f;
 
     uint32_t draw_count = 0;
-
-#if USE_CORE_PROFILE
-    int gl_version_major = 4;
-    int gl_version_minor = 1;
-    int profile = GLFW_OPENGL_CORE_PROFILE;
-    int forward = GLFW_TRUE;
-#else
-    int gl_version_major = 2;
-    int gl_version_minor = 1;
-#endif
 }
 
 typedef uint32_t index_t;
@@ -543,7 +525,11 @@ void renderer_opengl_t::begin_frame()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     glViewport(0, 0, width, height);
+#if USE_CORE_PROFILE
+    glClearDepthf(1.0);
+#else
     glClearDepth(1.0);
+#endif
     glClearColor(0.3f, 0.3f, 0.5f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1026,7 +1012,6 @@ void renderer_opengl_t::render_profile_ui()
 
 void renderer_opengl_t::render_ui()
 {
-    imgui_newframe();
     render_profile_ui();
     ImGui::Render();
     ImGui::EndFrame();
@@ -1149,14 +1134,44 @@ void render_background_texture(renderer_opengl_t& render)
 
 int main(void)
 {
+#if USE_CORE_PROFILE
+auto imgui_init = ImGui_ImplGlfwGL3_Init;
+auto imgui_shutdown = ImGui_ImplGlfwGL3_Shutdown;
+auto imgui_newframe = ImGui_ImplGlfwGL3_NewFrame;
+#else
+auto imgui_init = ImGui_ImplGlfwGL2_Init;
+auto imgui_shutdown = ImGui_ImplGlfwGL2_Shutdown;
+auto imgui_newframe = ImGui_ImplGlfwGL2_NewFrame;
+#endif
+
+#if USE_CORE_PROFILE
+    int gl_version_major = 4;
+    int gl_version_minor = 1;
+    int profile = GLFW_OPENGL_CORE_PROFILE;
+    int forward = GLFW_TRUE;
+#   if USE_GLES
+    gl_version_major = 3;
+    gl_version_minor = 0;
+#   endif
+#else
+    int gl_version_major = 2;
+    int gl_version_minor = 1;
+#endif
+
     glfwSetErrorCallback(error_callback);
 
     if (!glfwInit())
         exit(EXIT_FAILURE);
 
+    int client_api = GLFW_OPENGL_API;
+#if USE_GLES
+    client_api = GLFW_OPENGL_ES_API;
+#endif
+
     glfwWindowHint(GLFW_SAMPLES, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, gl_version_major);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, gl_version_minor);
+    glfwWindowHint(GLFW_CLIENT_API, client_api);
 #if USE_CORE_PROFILE
     glfwWindowHint(GLFW_OPENGL_PROFILE, profile);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, forward);
@@ -1170,7 +1185,13 @@ int main(void)
     }
 
     glfwMakeContextCurrent(window);
+
+#if USE_GLES
+    gladLoadGLES2Loader((GLADloadproc)glfwGetProcAddress);
+#else
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+#endif
+
     glfwSwapInterval(0);
     glfwSetKeyCallback(window, key_callback);
 
@@ -1243,7 +1264,8 @@ int main(void)
         }
 
         GLint stopTimerAvailable = 0;
-        glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
+        if (glGetQueryObjectiv)
+            glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
 
         if (stopTimerAvailable) {
             GLuint64 result_time = 0;
@@ -1258,6 +1280,7 @@ int main(void)
             draws_per_sec = draw_count / (gpu_time * 1e-3f);
         }
 
+        imgui_newframe();
         render.render_ui();
         auto b = std::chrono::high_resolution_clock::now();
         auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a);
