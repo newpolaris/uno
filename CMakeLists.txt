@@ -1,6 +1,6 @@
 # CMake entry point
 cmake_minimum_required (VERSION 3.0)
-project(ubo)
+project(uno)
 
 set(ROOT_PATH "${PROJECT_SOURCE_DIR}")
 set(DEPENDENCIES_PATH "${PROJECT_SOURCE_DIR}/externals")
