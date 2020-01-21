@@ -10,6 +10,9 @@
 #include <chrono>
 #include <vector>
 
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+
 namespace {
     int width = 600;
     int height = 400;
@@ -278,12 +281,17 @@ int main(void)
     if (!glfwInit())
         exit(EXIT_FAILURE);
 
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
     if (!window)
     {
         glfwTerminate();
         exit(EXIT_FAILURE);
     }
+
+#if defined(GLFW_EXPOSE_NATIVE_WIN32)
+    void* windowHandle = glfwGetWin32Window(window);
+#endif
 
     glfwMakeContextCurrent(window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
