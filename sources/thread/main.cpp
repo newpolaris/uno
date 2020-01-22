@@ -9,9 +9,12 @@
 #include <cstdlib>
 #include <chrono>
 #include <vector>
+#include <thread>
 
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+
+#include <dwmapi.h>
 
 #include <Wingdi.h>
 #include <GL/gl.h>
@@ -19,6 +22,30 @@
 #include <GL/wglext.h>
 
 #pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+#include <condition_variable>
+
+class semaphore_t
+{
+private:
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool flag_ = false;
+
+public:
+    void set() {
+        std::lock_guard<decltype(mutex_)> lock(mutex_);
+        flag_ = true;
+        condition_.notify_one();
+    }
+
+    void wait() {
+        std::unique_lock<decltype(mutex_)> lock(mutex_);
+        condition_.wait(lock, [this]{ return flag_;});
+        flag_ = false;
+    }
+};
 
 #if _WIN32
 extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
@@ -347,9 +374,36 @@ namespace {
         LocalFree(lpMessageBuffer);
     }
 
-    HDC hdc;    
-    HWND hwnd;
-    HGLRC context;
+    HDC hdc = 0;
+    HWND hwnd = 0;
+    HGLRC context = 0;
+    bool thread_running = true;
+}
+
+namespace {
+    PFNWGLSWAPINTERVALEXTPROC SwapIntervalEXT = 0;
+    PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribs = 0;
+
+    void swapIntervalWGL(GLFWwindow* window, int interval)
+    {
+#if 0
+            if (IsWindowsVistaOrGreater())
+            {
+                // DWM Composition is always enabled on Win8+
+                BOOL enabled = IsWindows8OrGreater();
+
+                // HACK: Disable WGL swap interval when desktop composition is enabled to
+                //       avoid interfering with DWM vsync
+                if (enabled ||
+                    (SUCCEEDED(DwmIsCompositionEnabled(&enabled)) && enabled))
+                    interval = 0;
+            }
+        }
+
+        if (_glfw.wgl.EXT_swap_control)
+            _glfw.wgl.SwapIntervalEXT(interval);
+#endif
+    }
 }
 
 bool wgl_context_create(void* window);
@@ -398,8 +452,8 @@ bool wgl_context_create(void* window)
         return false;
     }
 
-    PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribs =
-        (PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
+    wglCreateContextAttribs = (PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
+    SwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
 
     if (wglCreateContextAttribs)
     {
@@ -459,37 +513,20 @@ void wgl_context_destroy()
     hwnd = NULL;
 }
 
-int main(void)
+semaphore_t semaphore;
+
+void loop(void* window_handle)
 {
-    glfwSetErrorCallback(error_callback);
-
-    if (!glfwInit())
-        exit(EXIT_FAILURE);
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
-    if (!window)
-    {
-        glfwTerminate();
-        exit(EXIT_FAILURE);
+    if (!wgl_context_create(window_handle)) {
+        trace("failed to init loop");
+        return;
     }
-
-#if defined(GLFW_EXPOSE_NATIVE_WIN32)
-    void* window_handle = glfwGetWin32Window(window);
-#endif
-
-    wgl_context_create(window_handle);
-
-    glfwSetKeyCallback(window, key_callback);
-
-    ImGui_ImplGlfwGL3_Init(window, false);
+    ImGui_ImplGlfwGL3_CreateDeviceObjects();
 
     triangle::setup();
 
-    int running = GLFW_TRUE;
-    while (running)
-    {
-        glfwGetFramebufferSize(window, &width, &height);
+    while (thread_running) {
+        semaphore.wait();
 
         GLuint time_query[2];
 
@@ -518,13 +555,56 @@ int main(void)
         render_ui();
 
         SwapBuffers(hdc);
-
-        glfwPollEvents();
-        if (glfwWindowShouldClose(window))
-            running = GLFW_FALSE;
+        DwmFlush();
     }
 
     triangle::cleanup();
+    ImGui_ImplGlfwGL3_InvalidateDeviceObjects();
+    wgl_context_destroy();
+}
+
+int main(void)
+{
+    glfwSetErrorCallback(error_callback);
+
+    if (!glfwInit())
+        exit(EXIT_FAILURE);
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window = glfwCreateWindow(640, 480, "uno", NULL, NULL);
+    if (!window)
+    {
+        glfwTerminate();
+        exit(EXIT_FAILURE);
+    }
+
+#if defined(GLFW_EXPOSE_NATIVE_WIN32)
+    void* window_handle = glfwGetWin32Window(window);
+#endif
+
+    glfwSetKeyCallback(window, key_callback);
+
+    ImGui_ImplGlfwGL3_Init(window, false);
+
+    std::thread render_thread(loop, window_handle);
+
+    int running = GLFW_TRUE;
+    while (running)
+    {
+        glfwGetFramebufferSize(window, &width, &height);
+        semaphore.set();
+
+        glfwPollEvents();
+
+        if (glfwWindowShouldClose(window))
+            running = GLFW_FALSE;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+
+    thread_running = false;
+    semaphore.set();
+    render_thread.join();
 
 	ImGui_ImplGlfwGL3_Shutdown();
 
