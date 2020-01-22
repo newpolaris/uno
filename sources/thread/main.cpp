@@ -93,6 +93,7 @@ void debug_output(const char* message)
 namespace {
     int width = 600;
     int height = 400;
+    float waiting_time = 0.f;
     float cpu_time = 0.f;
     float gpu_time = 0.f;
 }
@@ -250,19 +251,6 @@ bool triangle::setup()
     return true;
 }
 
-void triangle::begin_frame()
-{ 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    glViewport(0, 0, width, height);
-    glClearDepth(1.0);
-    glClearColor(0.3f, 0.3f, 0.5f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glEnableVertexAttribArray(position_attribute);
-    glEnableVertexAttribArray(texcoord_attribute);
-}
-
 void triangle::render_frame()
 {
     glUseProgram(program);
@@ -337,6 +325,7 @@ void render_profile_ui()
     ImGui::Indent();
     ImGui::Text("CPU %s: %10.5f ms\n", "Main", cpu_time);
     ImGui::Text("GPU %s: %10.5f ms\n", "Main", gpu_time);
+    ImGui::Text("Wait %s: %10.5f ms\n", "Main", waiting_time);
     ImGui::Separator();
     ImGui::Unindent();
     ImGui::End();
@@ -379,6 +368,19 @@ namespace {
     HGLRC context = 0;
     bool thread_running = true;
 }
+
+void triangle::begin_frame()
+{ 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width, height);
+    glClearDepth(1.0);
+    glClearColor(0.3f, 0.3f, 0.5f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glEnableVertexAttribArray(position_attribute);
+    glEnableVertexAttribArray(texcoord_attribute);
+}
+
 
 namespace {
     PFNWGLSWAPINTERVALEXTPROC SwapIntervalEXT = 0;
@@ -525,19 +527,21 @@ void loop(void* window_handle)
 
     triangle::setup();
 
+    SwapIntervalEXT(0);
+
+    using timer = std::chrono::high_resolution_clock;
     while (thread_running) {
         semaphore.wait();
 
         GLuint time_query[2];
 
-        auto cpu_tick = std::chrono::high_resolution_clock::now();
+        auto cpu_tick = timer::now();
         glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
 
         triangle::render();
 
         glEndQuery(GL_TIME_ELAPSED);
-
-        auto cpu_tock = std::chrono::high_resolution_clock::now();
+        auto cpu_tock = timer::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
         cpu_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
 
@@ -553,9 +557,14 @@ void loop(void* window_handle)
         gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
 
         render_ui();
-
         SwapBuffers(hdc);
-        DwmFlush();
+        {
+            auto cpu_tick = timer::now();
+            DwmFlush();
+            auto cpu_tock = timer::now();
+            auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
+            waiting_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
+        }
     }
 
     triangle::cleanup();
@@ -598,8 +607,6 @@ int main(void)
 
         if (glfwWindowShouldClose(window))
             running = GLFW_FALSE;
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 
     thread_running = false;
