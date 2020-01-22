@@ -13,6 +13,56 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 
+#include <Wingdi.h>
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <GL/wglext.h>
+
+#pragma comment(lib, "opengl32.lib")
+
+#if _WIN32
+extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* _str);
+#else
+#   if defined(__OBJC__)
+#       import <Foundation/NSObjCRuntime.h>
+#   else
+#       include <CoreFoundation/CFString.h>
+        extern "C" void NSLog(CFStringRef _format, ...);
+#   endif
+#endif
+
+void debug_output(const char* message);
+void trace(const char* format, ...);
+
+void trace(const char* format, ...)
+{
+    const int kLength = 1024;
+    char buffer[kLength + 1] = {0,};
+    
+    va_list argList;
+    va_start(argList, format);
+    int len = vsnprintf(buffer, kLength, format, argList);
+    va_end(argList);
+    if (len > kLength)
+        len = kLength;
+    buffer[len] = '\0';
+
+    debug_output(buffer);
+}
+
+void debug_output(const char* message)
+{
+#if _WIN32
+    OutputDebugStringA(message);
+#else
+#   if defined(__OBJC__)
+    NSLog(@"%s", message);
+#   else
+    NSLog(CFSTR("%s"), message);
+#   endif
+#endif
+}
+
 namespace {
     int width = 600;
     int height = 400;
@@ -234,7 +284,7 @@ void triangle::cleanup()
 
 static void error_callback(int error, const char* description)
 {
-    fprintf(stderr, "Error: %s\n", description);
+    trace("Error: %s\n", description);
 }
 
 static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -273,6 +323,141 @@ void render_ui()
     ImGui::EndFrame();
 }
 
+namespace {
+
+    void reportLastWindowsError() {
+        LPSTR lpMessageBuffer = nullptr;
+        DWORD dwError = GetLastError();
+
+        if (dwError == 0) {
+            return;
+        }
+        FormatMessage(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER |
+            FORMAT_MESSAGE_FROM_SYSTEM |
+            FORMAT_MESSAGE_IGNORE_INSERTS,
+            nullptr,
+            dwError,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            lpMessageBuffer,
+            0, nullptr
+        );
+
+        trace("Windows error code: %d . %s\n", dwError, lpMessageBuffer);
+        LocalFree(lpMessageBuffer);
+    }
+
+    HDC hdc;    
+    HWND hwnd;
+    HGLRC context;
+}
+
+bool wgl_context_create(void* window);
+void wgl_context_destroy();
+
+bool wgl_context_create(void* window)
+{
+    PIXELFORMATDESCRIPTOR pfd = {
+        sizeof(PIXELFORMATDESCRIPTOR),
+        1,
+        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    // Flags
+        PFD_TYPE_RGBA,        // The kind of framebuffer. RGBA or palette.
+        32,                   // Colordepth of the framebuffer.
+        0, 0, 0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0, 0, 0, 0,
+        24,                   // Number of bits for the depthbuffer
+        0,                    // Number of bits for the stencilbuffer
+        0,                    // Number of Aux buffers in the framebuffer.
+        PFD_MAIN_PLANE,
+        0,
+        0, 0, 0
+    };
+
+    hwnd = reinterpret_cast<HWND>(window);
+    hdc = ::GetDC(hwnd);
+
+    int pixelFormat = ChoosePixelFormat(hdc, &pfd);
+    if (!pixelFormat)
+        return false;
+    if (!DescribePixelFormat(hdc, pixelFormat, sizeof(PIXELFORMATDESCRIPTOR), &pfd))
+        return false;
+    if (!SetPixelFormat(hdc, pixelFormat, &pfd))
+        return false;
+
+    HGLRC dummyContext = wglCreateContext(hdc);
+    if (!dummyContext)
+        return false;
+
+    if (!wglMakeCurrent(hdc, dummyContext))
+    {
+        wglDeleteContext(dummyContext);
+        wgl_context_destroy();
+        return false;
+    }
+
+    PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribs =
+        (PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
+
+    if (wglCreateContextAttribs)
+    {
+        int attribs[] = {
+            WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
+            WGL_CONTEXT_MINOR_VERSION_ARB, 1,
+            WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_DEBUG_BIT_ARB,
+            WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+            0, 0
+        };
+
+        context = wglCreateContextAttribs(hdc, nullptr, attribs);
+    }
+    else
+    {
+        context = wglCreateContext(hdc);
+    }
+
+    wglMakeCurrent(NULL, NULL);
+    wglDeleteContext(dummyContext);
+    dummyContext = nullptr;
+
+    if (!context || !wglMakeCurrent(hdc, context)) {
+        DWORD dwError = GetLastError();
+        if (dwError == (0xc0070000 | ERROR_INVALID_VERSION_ARB))
+            trace("WGL: Driver does not support OpenGL version");
+        else if (dwError == (0xc0070000 | ERROR_INVALID_PROFILE_ARB))
+            trace("WGL: Driver does not support the requested OpenGL profile");
+        else if (dwError == (0xc0070000 | ERROR_INCOMPATIBLE_DEVICE_CONTEXTS_ARB))
+            trace("WGL: The share context is not compatible with the requested context");
+        else
+            trace("WGL: Failed to create OpenGL context");
+        wgl_context_destroy();
+        return false;
+    }
+
+    gladLoadGL();
+
+    return true;
+}
+
+void wgl_context_destroy()
+{
+    // NOTE: 
+    // if you make two consecutive wlgMakeCurrent(NULL, NULL) calls,
+    // An invalid handle error may occur.
+    // But it seems to work well.
+    wglMakeCurrent(NULL, NULL);
+    if (context) {
+        wglDeleteContext(context);
+        context = NULL;
+    }
+    if (hwnd && hdc) {
+        ReleaseDC(hwnd, hdc);
+        hdc = NULL;
+    }
+    hwnd = NULL;
+}
 
 int main(void)
 {
@@ -290,11 +475,11 @@ int main(void)
     }
 
 #if defined(GLFW_EXPOSE_NATIVE_WIN32)
-    void* windowHandle = glfwGetWin32Window(window);
+    void* window_handle = glfwGetWin32Window(window);
 #endif
 
-    glfwMakeContextCurrent(window);
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    wgl_context_create(window_handle);
+
     glfwSetKeyCallback(window, key_callback);
 
     ImGui_ImplGlfwGL3_Init(window, false);
@@ -332,7 +517,8 @@ int main(void)
 
         render_ui();
 
-        glfwSwapBuffers(window);
+        SwapBuffers(hdc);
+
         glfwPollEvents();
         if (glfwWindowShouldClose(window))
             running = GLFW_FALSE;
@@ -341,6 +527,9 @@ int main(void)
     triangle::cleanup();
 
 	ImGui_ImplGlfwGL3_Shutdown();
+
+    wgl_context_destroy();
+
     glfwHideWindow(window);
     glfwDestroyWindow(window);
 
