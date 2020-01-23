@@ -10,6 +10,7 @@
 #include <chrono>
 #include <vector>
 #include <thread>
+#include <queue>
 
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -517,59 +518,87 @@ void wgl_context_destroy()
 
 semaphore_t semaphore;
 
-void loop(void* window_handle)
+void render_init(void* window_handle)
 {
     if (!wgl_context_create(window_handle)) {
         trace("failed to init loop");
         return;
     }
     ImGui_ImplGlfwGL3_CreateDeviceObjects();
-
     triangle::setup();
-
     SwapIntervalEXT(0);
+}
 
+void render_main()
+{
     using timer = std::chrono::high_resolution_clock;
-    while (thread_running) {
-        semaphore.wait();
 
-        GLuint time_query[2];
+    GLuint time_query[2];
 
+    auto cpu_tick = timer::now();
+    glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
+
+    triangle::render();
+
+    glEndQuery(GL_TIME_ELAPSED);
+    auto cpu_tock = timer::now();
+    auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
+    cpu_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
+
+    GLint stopTimerAvailable = 0;
+
+    // get query results
+    GLuint64 gpu_elapsed = 0;
+    glGetQueryObjectui64v(time_query[0], GL_QUERY_RESULT, &gpu_elapsed);
+
+    gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
+
+    render_ui();
+    SwapBuffers(hdc);
+    {
         auto cpu_tick = timer::now();
-        glBeginQuery(GL_TIME_ELAPSED, time_query[0]);
-
-        triangle::render();
-
-        glEndQuery(GL_TIME_ELAPSED);
+        // DwmFlush();
         auto cpu_tock = timer::now();
         auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
-        cpu_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
-
-        GLint stopTimerAvailable = 0;
-        while (!stopTimerAvailable) {
-            glGetQueryObjectiv(time_query[0], GL_QUERY_RESULT_AVAILABLE, &stopTimerAvailable);
-        }
-
-        // get query results
-        GLuint64 gpu_elapsed = 0;
-        glGetQueryObjectui64v(time_query[0], GL_QUERY_RESULT, &gpu_elapsed);
-
-        gpu_time = static_cast<float>(gpu_elapsed / 1e6f);
-
-        render_ui();
-        SwapBuffers(hdc);
-        {
-            auto cpu_tick = timer::now();
-            DwmFlush();
-            auto cpu_tock = timer::now();
-            auto cpu_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cpu_tock - cpu_tick);
-            waiting_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
-        }
+        waiting_time = static_cast<float>(cpu_elapsed.count() / 1000.0);
     }
+}
 
+void render_loop()
+{
+    while (thread_running)
+        render_main();
+}
+
+void render_cleanup()
+{
     triangle::cleanup();
     ImGui_ImplGlfwGL3_InvalidateDeviceObjects();
     wgl_context_destroy();
+}
+
+using job_t = std::function<void(void*)>;
+std::queue<job_t> queue_jobs;
+
+static std::mutex mutex;
+
+void enqueue_jobs(job_t&& job)
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    queue_jobs.push(job);
+}
+
+void loop(void* window_handle)
+{
+    while (thread_running)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (queue_jobs.size() == 0)
+            continue;
+        job_t job = queue_jobs.front();
+        queue_jobs.pop();
+        job(window_handle);
+    }
 }
 
 int main(void)
@@ -597,18 +626,26 @@ int main(void)
 
     std::thread render_thread(loop, window_handle);
 
+    job_t b = [=](void*) { render_init(window_handle); };
+    job_t a = [](void*) { render_main(); };
+
+    enqueue_jobs(std::move(b));
+
     int running = GLFW_TRUE;
     while (running)
     {
+        glfwPollEvents();
+
         glfwGetFramebufferSize(window, &width, &height);
         semaphore.set();
 
-        glfwPollEvents();
+        enqueue_jobs(std::move(a));
 
         if (glfwWindowShouldClose(window))
             running = GLFW_FALSE;
     }
 
+    enqueue_jobs([](void*) { render_cleanup(); });
     thread_running = false;
     semaphore.set();
     render_thread.join();
